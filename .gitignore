@@ -5,3 +5,5 @@ vendor/
 *.log
 
 .DS_Store
+
+.loop-state.json
