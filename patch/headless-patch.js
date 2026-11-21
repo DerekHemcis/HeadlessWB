@@ -552,6 +552,52 @@
       diag.total = document.querySelectorAll('*').length;
     } catch (e) {}
 
+    // ===== 策略 1：已知类名（从渲染层源码确证）=====
+    //   LoginView 结构：<div class="login-view"><div class="login-view__main">
+    //     <button class="login-view__button">{t('login.signIn')}</button>
+    //     <div class="login-view__waiting-hint"><div class="login-view__waiting-hint-actions">
+    //       <button>{t('login.copyLink')}</button> ...
+    var knownSel = (MODE === 'copy')
+      ? ['.login-view__waiting-hint-actions button', '.login-view__waiting-hint button']
+      : ['.login-view__button', '.login-view button', '.login-view__main button'];
+    var docs0 = roots();
+    diag.hasLoginView = false;
+    for (var s0 = 0; s0 < knownSel.length; s0++) {
+      for (var d0 = 0; d0 < docs0.length; d0++) {
+        var cand = null;
+        try { cand = docs0[d0].querySelectorAll(knownSel[s0]); } catch (e) { cand = null; }
+        if (cand && cand.length) {
+          var el0 = cand[cand.length > 1 && MODE === 'copy' ? cand.length - 1 : 0];
+          // copy 模式下若显示「重新发起登录」，取"复制登录链接"那个
+          if (MODE === 'copy' && cand.length > 1) {
+            for (var z = 0; z < cand.length; z++) {
+              if (norm(cand[z].innerText || cand[z].textContent || '').indexOf('复制') >= 0) { el0 = cand[z]; break; }
+            }
+          }
+          try { el0.scrollIntoView && el0.scrollIntoView({ block: 'center' }); } catch (e) {}
+          try { el0.click(); } catch (e) {}
+          try {
+            var rr = el0.getBoundingClientRect();
+            if (rr && rr.width > 0) {
+              var cx0 = rr.left + rr.width / 2, cy0 = rr.top + rr.height / 2;
+              ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function (tp) {
+                try {
+                  var ev0 = (tp.indexOf('pointer') === 0 && window.PointerEvent)
+                    ? new PointerEvent(tp, { bubbles: true, clientX: cx0, clientY: cy0 })
+                    : new MouseEvent(tp, { bubbles: true, clientX: cx0, clientY: cy0 });
+                  el0.dispatchEvent(ev0);
+                } catch (e) {}
+              });
+            }
+          } catch (e) {}
+          diag.hits.push('class:' + knownSel[s0]);
+          try { diag.loginViewText = String((docs0[d0].querySelector('.login-view') || {}).innerText || '').slice(0, 200); } catch (e) {}
+          return JSON.stringify({ r: 'clicked-class:' + knownSel[s0] + ':' + norm(el0.innerText || el0.textContent || ''), diag: diag });
+        }
+      }
+    }
+    try { diag.hasLoginView = !!(document.querySelector('.login-view')); } catch (e) {}
+
     var docs = roots();
     var tried = 0;
     for (var d = 0; d < docs.length; d++) {
@@ -631,7 +677,8 @@
     try { obj = JSON.parse(String(raw)); } catch (e) { log(tag, 'raw ->', String(raw).slice(0, 200)); return; }
     const d = obj.diag || {};
     log(tag, '->', obj.r);
-    log(`   DOM: url=${d.href} ready=${d.ready} title=${d.title} els=${d.total}`);
+    log(`   DOM: url=${d.href} ready=${d.ready} title=${d.title} els=${d.total} loginView=${d.hasLoginView}`);
+    if (d.loginViewText) log('   login-view 文本: ' + d.loginViewText.replace(/\s+/g, ' ').slice(0, 180));
     if (Array.isArray(d.texts) && d.texts.length) log('   可见短文本: ' + d.texts.join(' | '));
     if (obj.r && String(obj.r).indexOf('clicked') === 0) {
       // 点到了：稍等再确认浏览器是否被打开
