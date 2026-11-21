@@ -102,6 +102,7 @@
 
   const app = realElectron.app;
   let showRequested = MODE.show;
+  let loginDone = false;
 
   // 静音：无头模式下任何声音都是多余的暴露面（提示音、语音播放）
   if (MODE.headless) {
@@ -179,7 +180,11 @@
 
   function allowShow() {
     if (!MODE.headless) return true;
-    return showRequested;
+    if (showRequested) return true;
+    // 登录阶段：允许真正 show（否则 Chromium 认为窗口不可见，DOM 可能不完整），
+    // 但窗口已被设为透明 + 屏幕外 + 不占任务栏，用户看不到。
+    if (MODE.login && !loginDone) return true;
+    return false;
   }
 
   try {
@@ -198,11 +203,32 @@
   } catch (e) { log('prototype patch failed', e.message); }
 
   function HeadlessBrowserWindow(options) {
+    // 隐藏窗口默认会被 Chromium 后台节流，DOM 可能迟迟不完整 → 点不到按钮。
+    // 强制关闭节流；同时登录阶段把窗口放到屏幕外 + 不进任务栏，保证真实渲染但用户不可见。
+    try {
+      const o = options && typeof options === 'object' ? { ...options } : {};
+      o.webPreferences = { ...(o.webPreferences || {}), backgroundThrottling: false };
+      if (MODE.login && MODE.headless) {
+        o.skipTaskbar = true;
+        o.show = o.show === false ? false : o.show;   // 保留原值
+        o.x = -32000;
+        o.y = -32000;
+      }
+      options = o;
+    } catch (e) { log('window option patch failed', e.message); }
     const win = new RealBrowserWindow(options);
     allWindows.add(win);
     win.once('closed', () => allWindows.delete(win));
     if (MODE.headless) {
       try { win.webContents.setAudioMuted(true); } catch (e) { log('setAudioMuted failed', e.message); }
+      if (MODE.login) {
+        // 透明 + 屏幕外显示：渲染完整、用户看不见、也不占任务栏
+        try {
+          win.setSkipTaskbar(true);
+          win.setOpacity(0);
+          win.setPosition(-32000, -32000);
+        } catch (e) { log('login window hide failed', e.message); }
+      }
       // 页面跳转后（登录页/引导页）再压一次，防止重设
       try {
         win.webContents.on('did-finish-load', () => {
@@ -324,7 +350,7 @@
         const alive = wins.filter(w => w && !w.isDestroyed());
         const visible = alive.filter(w => { try { return w.isVisible(); } catch (e) { return false; } });
         log(`health[${tag}] pid=${process.pid} windows=${alive.length} visible=${visible.length} ` +
-            `externalOpen=${externalUrls.length} updateBlocked=${updateBlockedCount} loginOpened=${hasEverOpenedLogin()}`);
+            `externalOpen=${externalUrls.length} updateBlocked=${updateBlockedCount} loginOpened=${hasEverOpenedLogin()} showRequested=${showRequested} loginDone=${loginDone}`);
       } catch (e) { log(`health[${tag}] failed:`, e.message); }
     };
     app.whenReady().then(() => {
@@ -463,48 +489,123 @@
     }
   }
 
-  // 点击文案匹配：优先登录，其次引导/协议推进按钮
-  const LOGIN_CLICK_JS = `(function () {
+  // ============================================================
+  // 点击脚本
+  //   真机教训：登录按钮很可能是 div.oneid-button 这类非 button/a 元素，
+  //   早期只查 button,a,[role=button] 全部落空（真机 login step1 -> none）。
+  //   现在：宽选择器 + 叶子节点全文扫描 + iframe/shadowRoot 穿透。
+  // ============================================================
+  const CLICK_JS_TEMPLATE = (textsJson, mode) => `(function () {
+    var MODE = ${JSON.stringify(mode)};
+    var TEXTS = ${textsJson};
+    var LOGIN = ['登录','登 录','扫码登录','立即登录','登录/注册','Sign in','Log in','Login'];
+    var ADV   = ['同意并继续','同意','继续','下一步','开始使用','开始','知道了','跳过','Get Started','Agree','Continue','Next','Skip','Got it'];
+    var COPY  = ['复制登录链接','复制链接','重新发起登录','重新登录'];
+    var TARGET = MODE === 'copy' ? COPY : (MODE === 'advance' ? ADV : LOGIN);
+
+    function norm(s) { return (s || '').replace(/\s+/g, ''); }
+
+    // 收集所有根（含 iframe / shadowRoot）
+    function roots() {
+      var out = [document];
+      try {
+        var ifr = document.querySelectorAll('iframe');
+        for (var i = 0; i < ifr.length; i++) {
+          try { if (ifr[i].contentDocument) out.push(ifr[i].contentDocument); } catch (e) {}
+        }
+      } catch (e) {}
+      return out;
+    }
+
+    function collect(doc) {
+      var sel = 'button,a,[role=button],[class*=button],[class*=Button],[class*=oneid],[class*=Oneid],' +
+                '[class*=login],[class*=Login],[class*=btn],[class*=Btn],[tabindex],div,span';
+      var list = [];
+      try { list = Array.prototype.slice.call(doc.querySelectorAll(sel)); } catch (e) { list = []; }
+      // 追加 shadowRoot 内的元素
+      var shadow = [];
+      try {
+        var all = doc.querySelectorAll('*');
+        for (var i = 0; i < all.length && i < 8000; i++) {
+          if (all[i].shadowRoot) {
+            try { shadow = shadow.concat(Array.prototype.slice.call(all[i].shadowRoot.querySelectorAll('*'))); } catch (e) {}
+          }
+        }
+      } catch (e) {}
+      return list.concat(shadow);
+    }
+
+    function visible(el) {
+      try {
+        if (!el.getClientRects || el.getClientRects().length === 0) return false;
+        var st = window.getComputedStyle(el);
+        if (!st) return true;
+        return st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0';
+      } catch (e) { return true; }
+    }
+
+    var diag = { href: '', title: '', ready: '', total: 0, texts: [], hits: [] };
     try {
-      var loginTexts = ['登录', '登 录', '扫码登录', '立即登录', '登录/注册', 'Sign in', 'Log in', 'Login'];
-      var advanceTexts = ['同意并继续', '同意', '继续', '下一步', '开始使用', '开始', '知道了', '跳过', 'Get started', 'Agree', 'Continue', 'Next', 'Skip', 'Got it'];
-      var els = Array.from(document.querySelectorAll('button,a,[role=button]'));
-      var i, j, t;
-      for (i = 0; i < els.length; i++) {
-        t = ((els[i].innerText || els[i].textContent || '')).replace(/\\s+/g, '');
-        if (!t) continue;
-        for (j = 0; j < loginTexts.length; j++) {
-          if (t.indexOf(loginTexts[j]) >= 0) { els[i].click(); return 'login-clicked:' + t; }
+      diag.href = String(location.href).slice(0, 160);
+      diag.title = String(document.title || '').slice(0, 80);
+      diag.ready = String(document.readyState);
+      diag.total = document.querySelectorAll('*').length;
+    } catch (e) {}
+
+    var docs = roots();
+    var tried = 0;
+    for (var d = 0; d < docs.length; d++) {
+      var els = collect(docs[d]);
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        var t = norm(el.innerText || el.textContent || '');
+        if (!t || t.length > 24) continue;         // 只要短文本（按钮级）
+        if (diag.texts.length < 25 && t.length <= 24 && visible(el)) {
+          if (diag.texts.indexOf(t) < 0) diag.texts.push(t);
+        }
+        for (var j = 0; j < TARGET.length; j++) {
+          var hit = (MODE === 'copy') ? (t === TARGET[j]) : (t.indexOf(TARGET[j]) >= 0);
+          if (hit) {
+            tried++;
+            try { el.scrollIntoView && el.scrollIntoView({ block: 'center' }); } catch (e) {}
+            try { el.click(); } catch (e) {}
+            // 有些组件只认真实指针事件
+            try {
+              var r = el.getBoundingClientRect();
+              if (r && r.width > 0) {
+                var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function (type) {
+                  try {
+                    var ev = (type.indexOf('pointer') === 0 && window.PointerEvent)
+                      ? new PointerEvent(type, { bubbles: true, clientX: cx, clientY: cy })
+                      : new MouseEvent(type, { bubbles: true, clientX: cx, clientY: cy });
+                    el.dispatchEvent(ev);
+                  } catch (e) {}
+                });
+              }
+            } catch (e) {}
+            diag.hits.push(t);
+            return JSON.stringify({ r: 'clicked:' + t, diag: diag });
+          }
         }
       }
-      for (i = 0; i < els.length; i++) {
-        t = ((els[i].innerText || els[i].textContent || '')).replace(/\\s+/g, '');
-        if (!t) continue;
-        for (j = 0; j < advanceTexts.length; j++) {
-          if (t === advanceTexts[j] || t.indexOf(advanceTexts[j]) === 0) { els[i].click(); return 'advance-clicked:' + t; }
-        }
+    }
+
+    // 兜底：登录模式点任意 href 含 login 的链接
+    if (MODE === 'login') {
+      for (var d2 = 0; d2 < docs.length; d2++) {
+        try {
+          var ln = docs[d2].querySelectorAll('a[href*=login],a[href*=sso],a[href*=auth]');
+          if (ln && ln.length) { try { ln[0].click(); } catch (e) {} return JSON.stringify({ r: 'href:' + ln[0].getAttribute('href'), diag: diag }); }
+        } catch (e) {}
       }
-      var ln = Array.from(document.querySelectorAll('a[href*="/login"]'));
-      if (ln.length) { ln[0].click(); return 'href:' + ln[0].href; }
-      return 'none';
-    } catch (e) { return 'err:' + e.message; }
+    }
+    return JSON.stringify({ r: 'none', diag: diag });
   })();`;
 
-  // 点「复制登录链接」/「重新发起登录」
-  const COPY_LINK_JS = `(function () {
-    try {
-      var texts = ['复制登录链接', '复制链接', '重新发起登录', '重新登录'];
-      var els = Array.from(document.querySelectorAll('button,a,[role=button],span'));
-      for (var i = 0; i < els.length; i++) {
-        var t = ((els[i].innerText || els[i].textContent || '')).replace(/\\s+/g, '');
-        if (!t) continue;
-        for (var j = 0; j < texts.length; j++) {
-          if (t === texts[j]) { els[i].click(); return 'copy-clicked:' + t; }
-        }
-      }
-      return 'none';
-    } catch (e) { return 'err:' + e.message; }
-  })();`;
+  const LOGIN_CLICK_JS = CLICK_JS_TEMPLATE('[]', 'login');
+  const ADVANCE_CLICK_JS = CLICK_JS_TEMPLATE('[]', 'advance');
+  const COPY_LINK_JS = CLICK_JS_TEMPLATE('[]', 'copy');
 
   const realClipboard = realElectron.clipboard;
 
@@ -524,9 +625,37 @@
     return true;
   }
 
+  // 解析点击结果并记录 DOM 诊断（真机排障靠它）
+  function handleClickResult(tag, raw) {
+    let obj = null;
+    try { obj = JSON.parse(String(raw)); } catch (e) { log(tag, 'raw ->', String(raw).slice(0, 200)); return; }
+    const d = obj.diag || {};
+    log(tag, '->', obj.r);
+    log(`   DOM: url=${d.href} ready=${d.ready} title=${d.title} els=${d.total}`);
+    if (Array.isArray(d.texts) && d.texts.length) log('   可见短文本: ' + d.texts.join(' | '));
+    if (obj.r && String(obj.r).indexOf('clicked') === 0) {
+      // 点到了：稍等再确认浏览器是否被打开
+      setTimeout(() => { if (loginSucceeded()) onLoginSuccess(); }, 2500);
+    }
+  }
+
+  function onLoginSuccess() {
+    if (loginDone) return;
+    loginDone = true;
+    log('login: succeeded, hiding login window');
+    for (const w of allWindows) {
+      if (w && !w.isDestroyed()) {
+        try { w.setOpacity(1); } catch (e) {}
+        try { w.hide(); } catch (e) {}
+        try { w.setOpacity(0); } catch (e) {}
+      }
+    }
+  }
+
   function runLoginFlow() {
     if (loginFlowInProgress) { log('runLoginFlow: already in progress, skipped'); return; }
     loginFlowInProgress = true;
+    loginDone = false;
     loginBaseline = externalUrls.length;
     log('runLoginFlow: start (baseline=' + loginBaseline + ')');
 
@@ -534,26 +663,29 @@
     const SCALE = process.env.HEADLESSWB_LOGIN_FAST === '1' ? 0.05 : 1;
     const at = (ms) => Math.round(ms * SCALE);
 
-    // 第 1 步：点登录
-    setTimeout(() => {
+    // 更密的节奏：SPA 首屏可能要 10~30 秒才渲染出登录按钮
+    const loginAttempts = [3000, 8000, 14000, 20000, 28000, 36000, 45000];
+    loginAttempts.forEach((ms, i) => setTimeout(() => {
       if (loginSucceeded()) return;
-      log('login step1: click 登录');
-      runJsInWindow(LOGIN_CLICK_JS).then(r => log('  ->', String(r)));
-    }, at(3000));
-
-    // 第 2 步：8s / 18s 再点登录（页面可能还在加载）
-    [8000, 18000].forEach((ms, i) => setTimeout(() => {
-      if (loginSucceeded()) return;
-      log(`login step2.${i + 1}: retry click 登录`);
-      runJsInWindow(LOGIN_CLICK_JS).then(r => log('  ->', String(r)));
+      log(`login try #${i + 1} @${ms}ms: click 登录`);
+      runJsInWindow(LOGIN_CLICK_JS).then(r => handleClickResult('  ', r));
     }, at(ms)));
 
-    // 第 3 步：12s 起，若浏览器还没开，走「复制登录链接」+ 剪贴板
-    [12000, 24000].forEach((ms, i) => setTimeout(() => {
+    // 登录页可能先出现「同意/继续」引导，点它推进
+    [6000, 16000, 26000].forEach((ms, i) => setTimeout(() => {
       if (loginSucceeded()) return;
-      log(`login step3.${i + 1}: try 复制登录链接 + clipboard`);
+      log(`advance try #${i + 1} @${ms}ms`);
+      runJsInWindow(ADVANCE_CLICK_JS).then(r => {
+        try { const o = JSON.parse(String(r)); if (o && o.r && o.r.indexOf('clicked') === 0) log('  advance ->', o.r); } catch (e) {}
+      });
+    }, at(ms)));
+
+    // 复制登录链接 + 剪贴板（兜底拿 URL）
+    [18000, 30000, 42000].forEach((ms, i) => setTimeout(() => {
+      if (loginSucceeded()) return;
+      log(`copy-link try #${i + 1} @${ms}ms`);
       runJsInWindow(COPY_LINK_JS).then(r => {
-        log('  copy click ->', String(r));
+        handleClickResult('  copy', r);
         setTimeout(() => {
           if (loginSucceeded()) return;
           openLoginFromClipboard('  clipboard:');
@@ -561,16 +693,15 @@
       });
     }, at(ms)));
 
-    // 第 4 步：36s 仍未成功 → 直接开官网登录页
+    // 最终兜底：开 client-login 页（不是 /login 首页）
     setTimeout(() => {
       if (loginSucceeded()) { log('login flow: succeeded'); }
       else {
-        log('login step4: fallback open website login');
-        openExternal('https://www.workbuddy.cn/login');
+        log('login final fallback: open client-login page');
+        openExternal('https://www.workbuddy.cn/console/client-login');
       }
-      // 释放锁，允许后续再次 --login（例如登录态过期后重新登录）
       setTimeout(() => { loginFlowInProgress = false; log('runLoginFlow: released'); }, at(2000));
-    }, at(36000));
+    }, at(50000));
   }
 
   if (MODE.login) {

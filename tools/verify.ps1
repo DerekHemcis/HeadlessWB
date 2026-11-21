@@ -60,13 +60,15 @@ if (-not $out['processRunning']) {
 # 3) 补丁日志
 $logFile = Join-Path $home '.workbuddy\logs\headlesswb\patch.log'
 if (Test-Path $logFile) {
-  $out['patchLogTail'] = (Get-Content $logFile -Tail 12) -join ' | '
+  $out['patchLogTail'] = (Get-Content $logFile -Tail 14 -Encoding UTF8) -join ' | '
   # 关键补丁已生效的证据
   $out['patchLoaded']         = [bool](Select-String -Path $logFile -Pattern 'patch loaded' -Quiet)
   $out['requireShimActive']   = [bool](Select-String -Path $logFile -Pattern 'electron require shim installed' -Quiet)
   $out['updateBlockedSeen']   = [bool](Select-String -Path $logFile -Pattern 'blocked update check' -Quiet)
   $out['loginOpenedBrowser']  = [bool](Select-String -Path $logFile -Pattern 'client-login|openExternal' -Quiet)
-  $out['healthSnapshot']      = (Select-String -Path $logFile -Pattern 'health\[' | Select-Object -Last 2 | ForEach-Object { $_.Line }) -join ' | '
+  $out['loginClickedAny']     = [bool](Select-String -Path $logFile -Pattern 'clicked:' -Quiet)
+  $out['domDump']             = (Get-Content $logFile -Encoding UTF8 | Select-String -Pattern 'DOM: url=' | Select-Object -Last 3 | ForEach-Object { $_.Line }) -join ' | '
+  $out['healthSnapshot']      = (Select-String -Path $logFile -Pattern 'health\[' | Select-Object -Last 4 | ForEach-Object { $_.Line }) -join ' | '
   $out['quitSuppressed']      = [bool](Select-String -Path $logFile -Pattern 'suppressed app.quit' -Quiet)
 } else {
   $out['patchLogTail'] = '<未找到日志文件>'
