@@ -33,11 +33,15 @@ if ($totalLen -gt 250) {
 $joinScript = Join-Path $repoDir 'release\join-parts.ps1'
 if (-not (Test-Path $joinScript)) { throw "未找到 $joinScript（仓库不完整？）" }
 Write-Host '[2/5] 合并分卷并校验...'
-& $joinScript
-if ($LASTEXITCODE -ne 0) { throw "分卷合并失败（见上方输出）" }
-
 $zip = Join-Path $repoDir 'release\HeadlessWB.zip'
-if (-not (Test-Path $zip)) { throw "合并后未找到 $zip" }
+& $joinScript
+# 注意：join-parts.ps1 只用 cmdlet，不含原生进程，$LASTEXITCODE 可能保持 $null，
+# 而 PowerShell 里 ($null -ne 0) 为 $true，直接判断会必错。这里三重判定。
+$joinOk = $?
+$exitCode = $LASTEXITCODE
+if (-not $joinOk) { throw '分卷合并失败（见上方输出）' }
+if (($null -ne $exitCode) -and ($exitCode -ne 0)) { throw "分卷合并失败，退出码 $exitCode" }
+if (-not (Test-Path $zip)) { throw "分卷合并后未生成 $zip" }
 
 # ---- 3. 停掉正在运行的旧进程（文件被占用会导致解压失败） ----
 Write-Host '[3/5] 停止可能占用文件的进程...'

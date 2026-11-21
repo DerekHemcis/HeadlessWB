@@ -175,6 +175,25 @@ HeadlessWB/
 11. **`ELECTRON_RUN_AS_NODE` 环境变量**：若启动环境带此变量，Electron 会退化成纯 Node，
     表现为 `bad option: --login`。`install.ps1` / `wb-ctl.ps1` 已在启动前主动清除。
 
-12. **重打包保真性核对**（2026-11-22 增补）：把原版 asar 与新产物的条目列表做全量 diff → 新增 0 个、缺失 112 个（61 个跨平台 sidecar 文件 + 51 个因此变空的目录）。逐个确认这些**在官方 Windows 安装包里本来就不存在**（例：`koffi/build/koffi/win32_arm64`、`wwapi-electron/prebuilds/darwin-*` 均不在 Windows 包内），因此不是我们丢文件，而是 Windows 版官方也未分发。`verify-build.mjs` 已加第 4 步：逐个断言 6 个关键 Windows 原生模块（koffi win32_x64 ×2、node-pty ×2、im-napi、turing_sdk）在解压产物中存在。
+12. **⚠️ 致命：asar 重打包丢失 duplicate 判定 → 68% 文件数据区错位**（2026-11-22 第二轮真机实测）
+    `@electron/asar` 的 `Filesystem.insertFile()` 会对**内容相同**的文件返回 `duplicate=true`，
+    并让它们复用同一个 offset，写 payload 时必须跳过。我早期实现丢掉了这个返回值，
+    导致重复内容仍被写了一遍 → 从第一个重复文件起，后续所有文件的实际位置与 header 记录的 offset
+    全部偏移。本次构建实测有 **1016 个重复文件**，与真机"抽样 60 个错 41 个"完全吻合。
+    典型后果：`package.json` 读到乱码 → Electron 无法确定入口 → **静默 exit 1**（无 stderr、无日志）。
+    修复：接住 `duplicate` 并放进 `files[]`、metadata 复用 `determineFileType` 结果、
+    并在 asar 写完后做**全量自校验**（逐个文件 payload SHA256 vs header.integrity.hash）。
+    实测结果：7999 packed + 4233 unpacked（总 12232，等于原包 12293 减去 61 个未分发的跨平台文件），
+    **全量哈希 0 错**。
+    另注：`readFilesystemSync()` 按路径缓存，同一进程内替换文件后必须 `uncacheAll()`，
+    否则会拿旧 header 校验新数据（我第一版自校验就是被这个坑假报错）。
 
-13. **与原版 WorkBuddy 共存的单实例冲突**（2026-11-22 增补）：无头版沿用原版 userData 目录（好处是已登录态直接复用、免重新扫码），但 Electron `requestSingleInstanceLock` 以 userData 为锁——**原版与无头版不能同时运行**，否则后启动者抢锁失败退出。原版自启 Run 键名是 `WorkBuddy.WorkBuddy`（`resolveWin32AppUserModelId`）。因此 `install.ps1` 现在会：停掉 `WorkBuddy`/`HeadlessWB` 进程 → 删除原版 `WorkBuddy`/`WorkBuddy.WorkBuddy` 两个 Run 键 → 再写 `HeadlessWB` Run 键；`verify.ps1` 同步检查旧键已清、原版进程未跑。
+13. **`deploy.ps1` 的 `$LASTEXITCODE` 判断必错**（2026-11-22 第二轮真机实测）
+    `join-parts.ps1` 全程只用 cmdlet，不含原生进程，调用后 `$LASTEXITCODE` 保持 `$null`；
+    而 PowerShell 里 `$null -ne 0` 为 `$true` → 合并明明成功却无条件抛"合并失败"。
+    修复：改用 `$?` + `$null` 感知的退出码判断 + 产物存在性三重判定；
+    同时 `join-parts.ps1` 末尾显式 `exit 0`，让调用方拿到确定退出码。
+
+14. **重打包保真性核对**（2026-11-22 增补）：把原版 asar 与新产物的条目列表做全量 diff → 新增 0 个、缺失 112 个（61 个跨平台 sidecar 文件 + 51 个因此变空的目录）。逐个确认这些**在官方 Windows 安装包里本来就不存在**（例：`koffi/build/koffi/win32_arm64`、`wwapi-electron/prebuilds/darwin-*` 均不在 Windows 包内），因此不是我们丢文件，而是 Windows 版官方也未分发。`verify-build.mjs` 已加第 4 步：逐个断言 6 个关键 Windows 原生模块（koffi win32_x64 ×2、node-pty ×2、im-napi、turing_sdk）在解压产物中存在。
+
+15. **与原版 WorkBuddy 共存的单实例冲突**（2026-11-22 增补）：无头版沿用原版 userData 目录（好处是已登录态直接复用、免重新扫码），但 Electron `requestSingleInstanceLock` 以 userData 为锁——**原版与无头版不能同时运行**，否则后启动者抢锁失败退出。原版自启 Run 键名是 `WorkBuddy.WorkBuddy`（`resolveWin32AppUserModelId`）。因此 `install.ps1` 现在会：停掉 `WorkBuddy`/`HeadlessWB` 进程 → 删除原版 `WorkBuddy`/`WorkBuddy.WorkBuddy` 两个 Run 键 → 再写 `HeadlessWB` Run 键；`verify.ps1` 同步检查旧键已清、原版进程未跑。

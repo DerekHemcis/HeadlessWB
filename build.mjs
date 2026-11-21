@@ -293,9 +293,11 @@ async function patchAsar(appDir) {
   // 重打包（低层 API，精确保留每个文件的 unpacked 标记）
   log('重打包 app.asar（保留 unpacked 语义）…');
   const filesystem = new Filesystem(staging);
+  const metadata = Object.create(null);
   const files = [];
   const links = [];
   let dirCount = 0;
+  let dupCount = 0;
 
   // 目录要按从浅到深插入
   const relFiles = entries.map(e => e.rel.replace(/^\//, '')).filter(rel => fs.existsSync(path.join(staging, rel)));
@@ -321,23 +323,110 @@ async function patchAsar(appDir) {
     } else {
       const ft = await determineFileType(abs);
       if (ft.type !== 'file') { fail(`非预期文件类型 ${abs}: ${ft.type}`); }
-      await filesystem.insertFile(abs, () => fs.createReadStream(abs), wasUnpacked, ft);
-      files.push({ filename: abs, unpack: wasUnpacked });
+      // ⚠️ 必须接住 duplicate：内容相同的文件会复用已有 offset，
+      // 写 payload 时必须跳过，否则从第一个重复文件起全部错位（真机踩过）。
+      const dup = await filesystem.insertFile(abs, () => fs.createReadStream(abs), wasUnpacked, ft);
+      if (dup) dupCount++;
+      files.push({ filename: abs, unpack: wasUnpacked, duplicate: dup });
+      metadata[abs] = ft;   // 复用 determineFileType 的结果，保留 cachedBuffer 字段
     }
   }
+  if (dupCount) log(`检测到 ${dupCount} 个重复内容文件（已按 duplicate 跳过写 payload）`);
 
   const newAsar = path.join(TMP, 'app.asar.new');
-  const metadata = Object.create(null);
-  for (const f of files) {
-    metadata[f.filename] = { type: 'file', stat: { size: fs.statSync(f.filename).size, mode: 0o666, type: 'file' } };
-  }
   await writeFilesystem(newAsar, filesystem, { files, links }, metadata);
 
   // 替换
   fs.renameSync(asarPath, path.join(TMP, 'app.asar.bak'));
   fs.renameSync(newAsar, asarPath);
   log(`app.asar 重打包完成 (${(fs.statSync(asarPath).size / 1048576).toFixed(1)} MB)`);
+
+  // 立即全量自校验，坏包绝不产出（真机教训：曾出现 68% 文件数据区错位）
+  await verifyAsar(asarPath, unpackedDir, { sampleEvery: 1 });
   return { entry };
+}
+
+// ------------------------------------------------------------
+// asar 全量自校验（真机教训：重打包曾出现 68% 文件数据区错位）
+//   1) 每个 packed 文件：解出的 payload SHA256 必须等于 header.integrity.hash
+//   2) 每个 unpacked 文件：磁盘上必须存在且哈希一致
+//   3) package.json 必须能解析且含 main
+//   4) main/index.js 首行必须是补丁注入
+// ------------------------------------------------------------
+async function verifyAsar(asarPath, unpackedDir, { sampleEvery = 1 } = {}) {
+  const asarLib = path.join(ROOT, 'node_modules', '@electron', 'asar');
+  const { extractFile } = await import(pathToFileURL(path.join(asarLib, 'lib', 'asar.js')).href);
+  const { readFilesystemSync, uncacheAll } = await import(pathToFileURL(path.join(asarLib, 'lib', 'disk.js')).href);
+  const { createHash } = await import('node:crypto');
+
+  // ⚠️ readFilesystemSync 按路径缓存：本进程早前读过同一路径的“原始” asar，
+  // 不清缓存会拿到旧 header，导致假报错（真机教训的同类坑）。
+  try { uncacheAll(); } catch (e) {}
+  const fsys = readFilesystemSync(asarPath);
+  const flat = [];
+  const walk = (base, node) => {
+    if (!node.files) return;
+    for (const [name, child] of Object.entries(node.files)) {
+      const rel = base + '/' + name;
+      if (child.files) walk(rel, child);
+      else flat.push([rel, child]);
+    }
+  };
+  walk('', fsys.header);
+
+  let checked = 0, bad = 0, missing = 0;
+  const badList = [];
+  const sha = (buf) => createHash('sha256').update(buf).digest('hex');
+
+  for (let i = 0; i < flat.length; i++) {
+    if (i % sampleEvery !== 0) continue;
+    const [rel, info] = flat[i];
+    const relNoLead = rel.replace(/^\//, '');
+    const expect = info.integrity && info.integrity.hash;
+    try {
+      if (info.unpacked) {
+        const p = path.join(unpackedDir, relNoLead);
+        if (!fs.existsSync(p)) { missing++; badList.push('MISSING(unpacked) ' + relNoLead); continue; }
+        if (expect) {
+          const got = sha(fs.readFileSync(p));
+          if (got !== expect) { bad++; badList.push('HASH(unpacked) ' + relNoLead); }
+          else checked++;
+        } else checked++;
+      } else {
+        const buf = extractFile(asarPath, relNoLead);
+        if (buf.length !== info.size) { bad++; badList.push(`SIZE ${relNoLead} ${buf.length}!=${info.size}`); continue; }
+        if (expect) {
+          const got = sha(buf);
+          if (got !== expect) { bad++; badList.push('HASH ' + relNoLead); }
+          else checked++;
+        } else checked++;
+      }
+    } catch (e) {
+      bad++; badList.push(`ERR ${relNoLead}: ${e.message}`);
+    }
+  }
+
+  log(`asar 自校验: 总 ${flat.length} 个文件，抽检 ${checked + bad + missing}（每 ${sampleEvery} 个取 1），OK=${checked} BAD=${bad} MISSING=${missing}`);
+  if (badList.length) {
+    for (const b of badList.slice(0, 20)) log('  x ' + b);
+    if (badList.length > 20) log(`  ... 另有 ${badList.length - 20} 条`);
+    fail(`asar 自校验失败（BAD=${bad}, MISSING=${missing}）——拒绝产出损坏的包`);
+  }
+
+  try {
+    const pkg = JSON.parse(extractFile(asarPath, 'package.json').toString('utf8'));
+    if (!pkg.main) fail('package.json 缺少 main 字段');
+    log(`package.json OK: main=${pkg.main}, name=${pkg.name || '-'}, version=${pkg.version || '-'}`);
+  } catch (e) {
+    fail(`package.json 不可解析: ${e.message}`);
+  }
+
+  const entrySrc = extractFile(asarPath, 'main/index.js').toString('utf8');
+  if (!entrySrc.startsWith("require(require('path').join(process.resourcesPath,'headless-patch.js'));")) {
+    fail('main/index.js 首行未注入补丁');
+  }
+  log('main/index.js 注入点 OK');
+  return { total: flat.length, checked, bad, missing };
 }
 
 // ------------------------------------------------------------

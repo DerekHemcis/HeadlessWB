@@ -21,8 +21,8 @@ try {
   $fs.Close()
 }
 
-$expectedSize = 585950184
-$expectedSha  = '7598281D1EC94AAE8391709BEF5F4D490CBB432133392167A15DC9E989889686'
+$expectedSize = 585229854
+$expectedSha  = '8AFC58B1F2DAE64380962297683206FFB70F62C5B7BEAA8655DBED21D391F5CD'
 
 $actualSize = (Get-Item $outZip).Length
 Write-Host ("合并完成: {0} 字节 (预期 {1})" -f $actualSize, $expectedSize)
@@ -38,3 +38,5 @@ if ($actualSha -ne $expectedSha) {
   Write-Error "SHA256 不匹配，zip 损坏。请重新 clone 仓库后重试。"
 }
 Write-Host '分卷完整、校验通过 ✅'
+
+exit 0
