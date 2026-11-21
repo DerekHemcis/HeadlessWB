@@ -13,7 +13,9 @@ const modes = ['--headless', '--show', '--login', '--status'];
 
 let failed = false;
 for (const mode of modes) {
-  const r = spawnSync(process.execPath, [caseFile, mode], { encoding: 'utf8', timeout: 15000 });
+  const env = { ...process.env };
+  if (mode === '--login') env.HEADLESSWB_LOGIN_FAST = '1';
+  const r = spawnSync(process.execPath, [caseFile, mode], { encoding: 'utf8', timeout: 15000, env });
   const lines = (r.stdout || '').trim().split('\n').filter(Boolean);
   const last = lines.length ? lines[lines.length - 1] : '{}';
   let parsed = {};

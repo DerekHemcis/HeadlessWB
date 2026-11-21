@@ -70,11 +70,17 @@ const mockDialog = {
   _realBoxSync: 0,
 };
 
-const mockShell = { _open: 0, openExternal(u) { this._open++; return Promise.resolve(); } };
+const mockShell = { _open: 0, _opened: [], openExternal(u) { this._open++; this._opened.push(String(u)); return Promise.resolve(); } };
 
 const mockNet = {
   _fetchCalls: [],
   fetch(url) { this._fetchCalls.push(String(url)); return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) }); },
+};
+
+const mockClipboard = {
+  _text: '',
+  readText() { return this._text; },
+  writeText(t) { this._text = t; },
 };
 
 const mockSession = {
@@ -98,6 +104,7 @@ const mockElectron = {
   shell: mockShell,
   net: mockNet,
   session: mockSession,
+  clipboard: mockClipboard,
   screen: { getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }) },
 };
 
@@ -194,10 +201,18 @@ setTimeout(() => {
     }
 
     if (mode === '--login') {
-      // 仅验证加载不崩溃、whenReady 被消费、未打开真实外部浏览器
+      // 登录流程：模拟应用把「登录链接」写进剪贴板，补丁应读出来并自己 openExternal
       assert('login mode loads', true);
-      assert('no external open on load', mockShell._open === 0);
-      finish();
+      const LOGIN_URL = 'https://www.workbuddy.cn/console/client-login?code=ABCTEST123&target=/';
+      mockClipboard._text = LOGIN_URL;
+      // HEADLESSWB_LOGIN_FAST=1 时流程被压缩，等待足够轮次
+      setTimeout(() => {
+        const opened = mockShell._opened || [];
+        const hit = opened.some(u => u.indexOf('client-login') >= 0);
+        assert('clipboard login url opened by patch', hit);
+        // 设备码必须被遮蔽后才写日志
+        finish();
+      }, 2600);
       return;
     }
 

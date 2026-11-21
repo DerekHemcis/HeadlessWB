@@ -274,6 +274,11 @@
 
   // ============================================================
   // --login
+  //   三级策略（从可靠到兜底）：
+  //     1) 在隐藏窗口里点「登录」按钮 → 应用自身走 shell.openExternal 打开浏览器
+  //     2) 若没打开：点「复制登录链接」→ 读剪贴板拿 URL → 我们自己 shell.openExternal
+  //        （原版 i18n 里确实有 login.copyLink / login.browserNotOpened 兜底面板）
+  //     3) 最后兜底：直接开官网登录页
   // ============================================================
   let loginFlowStarted = false;
   function pickLiveWindow() {
@@ -284,13 +289,23 @@
   }
   function loginSucceeded() { return externalUrls.some(u => /client-login|\/login/.test(u)); }
 
+  function runJsInWindow(js) {
+    const win = pickLiveWindow();
+    if (!win) { log('runJs: no live window'); return Promise.resolve('no-window'); }
+    try {
+      return win.webContents.executeJavaScript(js, true).catch(e => 'err:' + e.message);
+    } catch (e) {
+      return Promise.resolve('throw:' + e.message);
+    }
+  }
+
+  // 点击文案匹配：优先登录，其次引导/协议推进按钮
   const LOGIN_CLICK_JS = `(function () {
     try {
       var loginTexts = ['登录', '登 录', '扫码登录', '立即登录', '登录/注册', 'Sign in', 'Log in', 'Login'];
-      var advanceTexts = ['同意', '同意并继续', '继续', '下一步', '开始使用', '开始', '知道了', '跳过', 'Get started', 'Agree', 'Continue', 'Next', 'Skip', 'Got it'];
+      var advanceTexts = ['同意并继续', '同意', '继续', '下一步', '开始使用', '开始', '知道了', '跳过', 'Get started', 'Agree', 'Continue', 'Next', 'Skip', 'Got it'];
       var els = Array.from(document.querySelectorAll('button,a,[role=button]'));
       var i, j, t;
-      // 优先：登录按钮
       for (i = 0; i < els.length; i++) {
         t = ((els[i].innerText || els[i].textContent || '')).replace(/\\s+/g, '');
         if (!t) continue;
@@ -298,7 +313,6 @@
           if (t.indexOf(loginTexts[j]) >= 0) { els[i].click(); return 'login-clicked:' + t; }
         }
       }
-      // 其次：新手引导/协议页的推进按钮（同意/继续/开始/跳过等）
       for (i = 0; i < els.length; i++) {
         t = ((els[i].innerText || els[i].textContent || '')).replace(/\\s+/g, '');
         if (!t) continue;
@@ -312,37 +326,82 @@
     } catch (e) { return 'err:' + e.message; }
   })();`;
 
-  function tryClickLogin() {
-    const win = pickLiveWindow();
-    if (!win) { log('tryClickLogin: no live window'); return; }
+  // 点「复制登录链接」/「重新发起登录」
+  const COPY_LINK_JS = `(function () {
     try {
-      win.webContents.executeJavaScript(LOGIN_CLICK_JS, true).then(r => {
-        log('login click result:', String(r));
-        if (loginSucceeded()) {
-          log('browser login opened; destroying hidden window');
-          try { win.destroy(); } catch (e) {}
+      var texts = ['复制登录链接', '复制链接', '重新发起登录', '重新登录'];
+      var els = Array.from(document.querySelectorAll('button,a,[role=button],span'));
+      for (var i = 0; i < els.length; i++) {
+        var t = ((els[i].innerText || els[i].textContent || '')).replace(/\\s+/g, '');
+        if (!t) continue;
+        for (var j = 0; j < texts.length; j++) {
+          if (t === texts[j]) { els[i].click(); return 'copy-clicked:' + t; }
         }
-      }).catch(e => log('login click failed', e.message));
-    } catch (e) { log('login click threw', e.message); }
+      }
+      return 'none';
+    } catch (e) { return 'err:' + e.message; }
+  })();`;
+
+  const realClipboard = realElectron.clipboard;
+
+  // 从剪贴板取登录 URL 并自己打开
+  function openLoginFromClipboard(tag) {
+    let txt = '';
+    try { txt = realClipboard && realClipboard.readText ? realClipboard.readText() : ''; } catch (e) { log(tag, 'clipboard read failed:', e.message); }
+    if (!txt) { log(tag, 'clipboard empty'); return false; }
+    const m = String(txt).match(/https?:\/\/[^\s"'<>]+/g);
+    if (!m) { log(tag, 'clipboard has no url'); return false; }
+    const url = m.find(u => /client-login|\/login|workbuddy|codebuddy/i.test(u)) || m[0];
+    // 日志里只保留 host + path，遮蔽设备码
+    const safe = url.replace(/([?&]code=)[^&]+/i, '$1***');
+    log(tag, 'clipboard login url:', safe.slice(0, 180));
+    if (!/^https?:\/\//.test(url)) return false;
+    openExternal(url);
+    return true;
   }
 
   function runLoginFlow() {
     if (loginFlowStarted) return;
     loginFlowStarted = true;
     log('runLoginFlow: start');
-    [3000, 8000, 15000, 22000].forEach((ms, idx) => {
-      setTimeout(() => {
-        if (loginSucceeded()) return;
-        log(`login attempt #${idx + 1} at ${ms}ms`);
-        tryClickLogin();
-      }, ms);
-    });
+
+    // 时间缩放：HEADLESSWB_LOGIN_FAST=1 时压缩到 1/20，仅用于自动化测试
+    const SCALE = process.env.HEADLESSWB_LOGIN_FAST === '1' ? 0.05 : 1;
+    const at = (ms) => Math.round(ms * SCALE);
+
+    // 第 1 步：点登录
     setTimeout(() => {
-      if (!loginSucceeded()) {
-        log('login flow fallback: open website login');
-        openExternal('https://www.workbuddy.cn/login');
-      }
-    }, 30000);
+      if (loginSucceeded()) return;
+      log('login step1: click 登录');
+      runJsInWindow(LOGIN_CLICK_JS).then(r => log('  ->', String(r)));
+    }, at(3000));
+
+    // 第 2 步：8s / 18s 再点登录（页面可能还在加载）
+    [8000, 18000].forEach((ms, i) => setTimeout(() => {
+      if (loginSucceeded()) return;
+      log(`login step2.${i + 1}: retry click 登录`);
+      runJsInWindow(LOGIN_CLICK_JS).then(r => log('  ->', String(r)));
+    }, at(ms)));
+
+    // 第 3 步：12s 起，若浏览器还没开，走「复制登录链接」+ 剪贴板
+    [12000, 24000].forEach((ms, i) => setTimeout(() => {
+      if (loginSucceeded()) return;
+      log(`login step3.${i + 1}: try 复制登录链接 + clipboard`);
+      runJsInWindow(COPY_LINK_JS).then(r => {
+        log('  copy click ->', String(r));
+        setTimeout(() => {
+          if (loginSucceeded()) return;
+          openLoginFromClipboard('  clipboard:');
+        }, at(1200));
+      });
+    }, at(ms)));
+
+    // 第 4 步：36s 仍未成功 → 直接开官网登录页
+    setTimeout(() => {
+      if (loginSucceeded()) { log('login flow: succeeded'); return; }
+      log('login step4: fallback open website login');
+      openExternal('https://www.workbuddy.cn/login');
+    }, at(36000));
   }
 
   if (MODE.login) {
