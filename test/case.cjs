@@ -13,6 +13,8 @@ process.env.USERPROFILE = fakeHome;
 
 const argv = process.argv.slice(2);
 const mode = argv[0] || '--headless';
+// 让 run-tests.mjs 知道隔离 HOME，便于事后检查 status.json
+console.log('FAKEHOME=' + fakeHome);
 
 const results = [];
 function assert(name, cond) {

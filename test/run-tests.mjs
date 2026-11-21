@@ -6,6 +6,7 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const caseFile = path.join(__dirname, 'case.cjs');
@@ -21,6 +22,24 @@ for (const mode of modes) {
   let parsed = {};
   try { parsed = JSON.parse(last); } catch (e) {}
   const results = Array.isArray(parsed.results) ? parsed.results : [];
+  // --status 模式：校验 status.json 确实被写出（Windows GUI 子系统看不到 stdout，靠它）
+  if (mode === '--status') {
+    const homeLine = (r.stdout || '').split('\n').find(l => l.startsWith('FAKEHOME='));
+    if (homeLine) {
+      const fakeHome = homeLine.slice('FAKEHOME='.length).trim();
+      const statusFile = path.join(fakeHome, '.workbuddy', 'logs', 'headlesswb', 'status.json');
+      const ok = fs.existsSync(statusFile);
+      results.push({ name: 'status.json written for GUI-subsystem exe', ok });
+      if (ok) {
+        try {
+          const j = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
+          results.push({ name: 'status.json has app+running fields', ok: j.app === 'HeadlessWB' && typeof j.running === 'boolean' });
+        } catch (e) { results.push({ name: 'status.json parseable', ok: false }); }
+      }
+    } else {
+      results.push({ name: 'FAKEHOME reported', ok: false });
+    }
+  }
   const bad = results.filter(x => !x.ok);
   console.log(`\n=== ${mode} (exit ${r.status}) ===`);
   for (const x of results) console.log(`  ${x.ok ? 'PASS' : 'FAIL'}  ${x.name}`);

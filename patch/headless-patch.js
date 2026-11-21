@@ -60,22 +60,40 @@
   const origRequire = Module.prototype.require;
   const realElectron = origRequire.call(module, 'electron');
 
-  // --status 走真实 electron 即可
+  // --status：注意 Electron 在 Windows 上是 GUI 子系统程序，
+  // 终端里看不到 console.log 输出。所以必须同时写 status.json 给 wb-ctl/verify 读。
   if (MODE.status) {
+    const STATUS_FILE = path.join(LOG_DIR, 'status.json');
+    let pidFromFile = null;
     let running = false;
     try {
       const pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10);
       if (Number.isFinite(pid) && pid > 0) {
+        pidFromFile = pid;
         try { process.kill(pid, 0); running = true; } catch (e) { running = false; }
       }
-    } catch (e) { running = false; }
-    console.log(JSON.stringify({
+    } catch (e) {}
+
+    let version = 'unknown';
+    try { version = realElectron.app.getVersion(); } catch (e) {}
+
+    const info = {
       app: 'HeadlessWB',
-      version: realElectron.app.getVersion(),
-      pid: process.pid,
-      runningInstance: running ? parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10) : null,
+      version,
+      statusPid: process.pid,
+      runningInstance: running ? pidFromFile : null,
+      running: running,
+      pidFile: PID_FILE,
+      patchLog: path.join(LOG_DIR, 'patch.log'),
       mode: 'status',
-    }));
+      at: new Date().toISOString(),
+    };
+    const json = JSON.stringify(info, null, 2);
+    try {
+      fs.mkdirSync(LOG_DIR, { recursive: true });
+      fs.writeFileSync(STATUS_FILE, json, 'utf8');
+    } catch (e) {}
+    try { console.log(json); } catch (e) {}
     process.exit(0);
   }
 

@@ -10,7 +10,17 @@ if (-not (Test-Path $exe)) { Write-Error "未找到 HeadlessWB.exe"; exit 1 }
 
 switch ($Command) {
   'status' {
-    & $exe --status
+    # Electron 是 GUI 子系统程序，stdout 在终端里看不到，所以读 status.json
+    $logDir = Join-Path $env:USERPROFILE '.workbuddy\logs\headlesswb'
+    $statusFile = Join-Path $logDir 'status.json'
+    if (Test-Path $statusFile) { Remove-Item $statusFile -Force -ErrorAction SilentlyContinue }
+    $proc = Start-Process -FilePath $exe -ArgumentList '--status' -PassThru -Wait -WindowStyle Hidden
+    Start-Sleep -Milliseconds 300
+    if (Test-Path $statusFile) {
+      Get-Content $statusFile -Raw
+    } else {
+      Write-Host "status.json 未生成（退出码 $($proc.ExitCode)），请查看 $logDir\patch.log"
+    }
   }
   'show' {
     Start-Process -FilePath $exe -ArgumentList '--show'

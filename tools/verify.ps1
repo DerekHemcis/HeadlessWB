@@ -30,6 +30,14 @@ $vc = @('vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll') | ForEach-Object
 }
 $out['vcRuntimeDlls'] = $vc -join ', '
 
+# 2d) status.json（--status 写出的结构化状态）
+$statusFile = Join-Path $home '.workbuddy\logs\headlesswb\status.json'
+if (Test-Path $statusFile) {
+  try { $out['status'] = (Get-Content $statusFile -Raw | ConvertFrom-Json) } catch { $out['status'] = 'parse-error' }
+} else {
+  $out['status'] = '<未生成：先运行 wb-ctl.ps1 status>'
+}
+
 # 3) 补丁日志
 $logFile = Join-Path $home '.workbuddy\logs\headlesswb\patch.log'
 if (Test-Path $logFile) {
