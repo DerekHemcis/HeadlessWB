@@ -6,6 +6,29 @@
 
 ---
 
+## ⚡ 直接粘贴给雷蛇 DSH 的指令（推荐）
+
+> 下面整段复制给雷蛇上的 DSH 即可，它会自行按本文件执行。
+
+```
+请在这台 Windows 上部署并测试 HeadlessWB（WorkBuddy 无头隐蔽版）。严格按仓库里的流程文档执行，不要自行改代码。
+
+步骤：
+1. 克隆仓库：git clone https://github.com/DerekHemcis/HeadlessWB.git C:\Users\xuesh\HeadlessWB-repo
+2. 通读 C:\Users\xuesh\HeadlessWB-repo\docs\razor-test-procedure.md，然后严格照它执行（它会让你合并分卷、解压、装自启、跑校验）。
+3. 合并分卷必须成功（SHA256 校验通过），解压到 C:\Users\xuesh\HeadlessWB。
+4. 执行 install.ps1 后等 60 秒，然后运行 tools\verify.ps1 并把 JSON 输出完整保留。
+5. 遇到需要人操作的两处，把问题抛给我（用户）并等我回复：
+   a) 浏览器弹出登录页时，需要我扫码；
+   b) 手机 App 远控确认。
+6. 全部跑完后，按文档第 8 节把六块结果汇总输出给我，另外附上 patch.log 最后 120 行。
+
+注意：这台机器的 PowerShell 是 5.1，没有 pwsh，请用全路径 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe。
+如果哪一步失败，不要重试超过 2 次，把原始报错和 patch.log 一起返回。
+```
+
+---
+
 ## 0. 前置条件
 
 1. 雷蛇上有 git 和 PowerShell 5.1（雷蛇没有 pwsh，全路径见下）。
@@ -15,8 +38,7 @@
 
 ```powershell
 $P = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
-# 把 <repo-url> 换成实际 GitHub 仓库地址
-git clone <repo-url> C:\Users\xuesh\HeadlessWB-repo
+git clone https://github.com/DerekHemcis/HeadlessWB.git C:\Users\xuesh\HeadlessWB-repo
 ```
 
 合并分卷（交付 zip 约 559 MiB，切成 7 个 ≤90MB 的 part，避免 GitHub 100MB 单文件限制）：
