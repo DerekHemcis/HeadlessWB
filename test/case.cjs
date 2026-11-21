@@ -143,6 +143,30 @@ setTimeout(() => {
     if (mode === '--headless') {
       assert('Tray replaced', electron.Tray !== mockTray);
       assert('Notification replaced', electron.Notification !== mockNotification);
+
+      // 哑对象必须容忍任何未知方法调用（官方改版加新 API 也不会抛错中断初始化）
+      const tray = new electron.Tray({});
+      let trayThrew = null;
+      try {
+        tray.setToolTip('x');
+        tray.setContextMenu(null);
+        tray.on('click', () => {});
+        tray.displayBalloon({});
+        tray.destroy();
+        tray.someFutureApiWeNeverHeardOf(1, 2, 3);   // Proxy 兜底
+      } catch (e) { trayThrew = e.message; }
+      assert('tray dummy tolerates unknown methods', trayThrew === null);
+      assert('tray.isDestroyed() true', tray.isDestroyed() === true);
+      assert('tray.getBounds() object', typeof tray.getBounds() === 'object');
+
+      const nt = new electron.Notification({});
+      let ntThrew = null;
+      try {
+        nt.show(); nt.close(); nt.on('click', () => {});
+        nt.anotherUnknownApi();                       // Proxy 兜底
+      } catch (e) { ntThrew = e.message; }
+      assert('notification dummy tolerates unknown methods', ntThrew === null);
+      assert('Notification.isSupported() false', electron.Notification.isSupported() === false);
       assert('BrowserWindow wrapped', electron.BrowserWindow !== MockBrowserWindow);
       assert('app unchanged (real app proxied)', electron.app === mockApp);
 

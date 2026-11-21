@@ -25,7 +25,7 @@ git clone <repo-url> C:\Users\xuesh\HeadlessWB-repo
 & $P -NoProfile -ExecutionPolicy Bypass -File "C:\Users\xuesh\HeadlessWB-repo\release\join-parts.ps1"
 ```
 
-合并后应得到 `release\HeadlessWB.zip`，大小 **586,127,355 字节**（脚本会校验并告警）。
+合并后应得到 `release\HeadlessWB.zip`，大小 **586,127,802 字节**（脚本会校验并告警）。
 
 ### 0.2 解压到稳定目录
 

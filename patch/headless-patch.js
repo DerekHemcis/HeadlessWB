@@ -88,18 +88,58 @@
 
   // ============================================================
   // 哑对象
+  //   Electron 对象上任何未预期的方法调用都会抛 TypeError，足以中断原版初始化流程。
+  //   所以哑对象同时用「显式方法 + Proxy 万能兜底」：未知属性一律返回 no-op 函数，
+  //   保证无论官方怎么改版都不会因为调用哑对象而崩。
   // ============================================================
-  class DummyTray {
-    constructor() { this.__dummy = true; }
-    destroy() {} setToolTip() {} setContextMenu() {} setTitle() {} setImage() {}
-    setPressedImage() {} setIgnoreDoubleClickEvents() {} popUpContextMenu() {}
-    closeContextMenu() {} displayBalloon() {} removeBalloon() {} focus() {}
-    on() { return this; } once() { return this; } off() { return this; } removeListener() { return this; }
+  function withNoopFallback(obj) {
+    return new Proxy(obj, {
+      get(target, prop, receiver) {
+        if (prop in target) return Reflect.get(target, prop, receiver);
+        if (typeof prop === 'symbol') return undefined;
+        if (prop === 'then') return undefined; // 避免被当成 thenable
+        return function () {};
+      },
+    });
   }
+
+  class DummyTray {
+    constructor() { return withNoopFallback(this); }
+    destroy() {}
+    setToolTip() {}
+    setContextMenu() {}
+    setTitle() {}
+    setImage() {}
+    setPressedImage() {}
+    setIgnoreDoubleClickEvents() {}
+    getIgnoreDoubleClickEvents() { return false; }
+    popUpContextMenu() {}
+    closeContextMenu() {}
+    displayBalloon() {}
+    removeBalloon() {}
+    focus() {}
+    setHighlightMode() {}
+    getBounds() { return { x: 0, y: 0, width: 0, height: 0 }; }
+    isDestroyed() { return true; }  // 让调用方认为托盘不可用，直接跳过托盘相关工作
+    on() { return this; }
+    once() { return this; }
+    off() { return this; }
+    removeListener() { return this; }
+    removeAllListeners() { return this; }
+  }
+  DummyTray.prototype.isDestroyed = function () { return true; };
+
   class DummyNotification {
-    constructor() { this.__dummy = true; }
+    constructor() { return withNoopFallback(this); }
     static isSupported() { return false; }
-    show() {} close() {} on() { return this; } once() { return this; } off() { return this; }
+    show() {}
+    close() {}
+    isDestroyed() { return true; }
+    on() { return this; }
+    once() { return this; }
+    off() { return this; }
+    removeListener() { return this; }
+    removeAllListeners() { return this; }
   }
 
   // ============================================================
