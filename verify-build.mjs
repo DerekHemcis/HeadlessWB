@@ -24,13 +24,13 @@ function run(cmd, args, cwd = __dirname) {
   return r;
 }
 
-step('1/3 补丁语法检查');
+step('1/4 补丁语法检查');
 run(process.execPath, ['--check', path.join(__dirname, 'patch', 'headless-patch.js')]);
 
-step('2/3 冒烟测试（mock electron）');
+step('2/4 冒烟测试（mock electron）');
 run(process.execPath, [path.join(__dirname, 'test', 'run-tests.mjs')]);
 
-step('3/3 产物 asar 校验');
+step('3/4 产物 asar 校验');
 const asarPath = path.join(__dirname, 'dist', 'HeadlessWB', 'resources', 'app.asar');
 if (!fs.existsSync(asarPath)) {
   console.log('未找到 dist/HeadlessWB/resources/app.asar（先跑 node build.mjs）');
@@ -45,6 +45,25 @@ if (!fs.existsSync(asarPath)) {
   console.log(ok ? 'asar 校验通过 ✅' : 'asar 校验失败 ❌');
   if (!ok) failed = true;
 }
+
+// ---- 4) 关键 Windows 原生模块必须在解压后的 sidecar 里 ----
+step('4/4 Windows 原生模块齐全性');
+const sidecar = path.join(__dirname, 'dist', 'HeadlessWB', 'resources', 'app.asar.unpacked');
+const critical = [
+  'cli/node_modules/koffi/build/koffi/win32_x64/koffi.node',
+  'node_modules/koffi/build/koffi/win32_x64/koffi.node',
+  'node_modules/node-pty/prebuilds/win32-x64/pty.node',
+  'node_modules/node-pty/prebuilds/win32-x64/conpty.node',
+  'resources/im-backend-cmd/im-napi.node',
+  'native/turing-sdk/build/Release/turing_sdk.node',
+];
+let miss = 0;
+for (const rel of critical) {
+  const abs = path.join(sidecar, rel);
+  if (fs.existsSync(abs)) console.log(`  OK   ${rel}`);
+  else { console.log(`  缺失 ${rel}`); miss++; failed = true; }
+}
+console.log(miss === 0 ? 'Windows 原生模块齐全 ✅' : `缺 ${miss} 个原生模块 ❌`);
 
 console.log(failed ? '\n验证未全部通过 ❌' : '\n全部验证通过 ✅');
 process.exit(failed ? 1 : 0);
