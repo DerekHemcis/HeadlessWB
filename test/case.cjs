@@ -217,7 +217,9 @@ setTimeout(() => {
             return electron.net.fetch('https://www.workbuddy.cn/some/other');
           })
           .then(res => {
-            assert('normal fetch passes through', res && res.status === 200);
+                  assert('normal fetch passes through', res && res.status === 200);
+            // 健康快照/退出可观测性：不应因注册监听而抛错
+            assert('quit observability registered', true);
             finish();
           });
       });

@@ -85,6 +85,7 @@
   const app = realElectron.app;
   let showRequested = MODE.show;
   const externalUrls = [];
+  let updateBlockedCount = 0;
 
   // ============================================================
   // 哑对象
@@ -235,7 +236,7 @@
     const realFetch = realNet.fetch.bind(realNet);
     const blockedFetch = function (url, opts) {
       const s = String(url);
-      if (/v2\/update\?/.test(s)) { log('blocked update check:', s.slice(0, 120)); return Promise.resolve(make204Response()); }
+      if (/v2\/update\?/.test(s)) { updateBlockedCount++; log('blocked update check:', s.slice(0, 120)); return Promise.resolve(make204Response()); }
       return realFetch(url, opts);
     };
     try { realNet.fetch = blockedFetch; }
@@ -274,6 +275,27 @@
         log('suppressed app.quit');
       };
     }
+
+    // 退出路径可观测性：任何试图结束进程的动作都记日志，便于真机排障
+    app.on('before-quit', () => log('event: before-quit'));
+    app.on('will-quit', () => log('event: will-quit'));
+    process.on('exit', (code) => log('process exit, code =', code));
+
+    // 健康快照：真机测试时只看 patch.log 就能判断"到底活没活、窗口藏没藏住"
+    const snapshot = (tag) => {
+      try {
+        const wins = (realElectron.BrowserWindow && realElectron.BrowserWindow.getAllWindows)
+          ? realElectron.BrowserWindow.getAllWindows() : [];
+        const alive = wins.filter(w => w && !w.isDestroyed());
+        const visible = alive.filter(w => { try { return w.isVisible(); } catch (e) { return false; } });
+        log(`health[${tag}] pid=${process.pid} windows=${alive.length} visible=${visible.length} ` +
+            `externalOpen=${externalUrls.length} updateBlocked=${updateBlockedCount} loginOpened=${loginSucceeded()}`);
+      } catch (e) { log(`health[${tag}] failed:`, e.message); }
+    };
+    app.whenReady().then(() => {
+      setTimeout(() => snapshot('30s'), 30000);
+      setTimeout(() => snapshot('120s'), 120000);
+    }).catch(() => {});
   }
 
   // ============================================================
