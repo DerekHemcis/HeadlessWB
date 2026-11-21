@@ -84,6 +84,14 @@
 
   const app = realElectron.app;
   let showRequested = MODE.show;
+
+  // 静音：无头模式下任何声音都是多余的暴露面（提示音、语音播放）
+  if (MODE.headless) {
+    try {
+      app.commandLine.appendSwitch('mute-audio');
+      log('audio muted via --mute-audio');
+    } catch (e) { log('mute-audio switch failed', e.message); }
+  }
   const externalUrls = [];
   let updateBlockedCount = 0;
 
@@ -175,6 +183,15 @@
     const win = new RealBrowserWindow(options);
     allWindows.add(win);
     win.once('closed', () => allWindows.delete(win));
+    if (MODE.headless) {
+      try { win.webContents.setAudioMuted(true); } catch (e) { log('setAudioMuted failed', e.message); }
+      // 页面跳转后（登录页/引导页）再压一次，防止重设
+      try {
+        win.webContents.on('did-finish-load', () => {
+          try { win.webContents.setAudioMuted(true); } catch (e) {}
+        });
+      } catch (e) {}
+    }
     return win;
   }
   HeadlessBrowserWindow.prototype = RealBrowserWindow.prototype;

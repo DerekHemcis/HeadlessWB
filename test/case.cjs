@@ -33,7 +33,7 @@ const mockApp = {
   quit() { this._quitCalls++; },
   setBadgeCount() { this._badgeCalls++; },
   setLoginItemSettings() { this._loginCalls++; },
-  commandLine: { hasSwitch: () => false, appendSwitch: () => {} },
+  commandLine: { _switches: [], hasSwitch: (n) => mockApp.commandLine._switches.indexOf(n) >= 0, appendSwitch: (n) => { mockApp.commandLine._switches.push(n); } },
 };
 
 class MockBrowserWindow {
@@ -44,6 +44,10 @@ class MockBrowserWindow {
       isDestroyed: () => false,
       executeJavaScript: (js, b) => Promise.resolve('mock-click'),
       once: () => {},
+      on: () => {},
+      _muted: false,
+      setAudioMuted(v) { this._muted = v; },
+      isAudioMuted() { return this._muted; },
     };
     MockBrowserWindow.instances.push(this);
   }
@@ -173,6 +177,8 @@ setTimeout(() => {
       const win = new electron.BrowserWindow({});
       win.show();
       assert('show suppressed in headless', win.shown === 0);
+      assert('audio muted on window', win.webContents.isAudioMuted() === true);
+      assert('mute-audio switch appended', mockApp.commandLine._switches.indexOf('mute-audio') >= 0);
 
       mockApp.emit('window-all-closed');
       electron.app.quit();

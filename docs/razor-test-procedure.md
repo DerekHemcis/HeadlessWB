@@ -50,7 +50,7 @@ git clone https://github.com/DerekHemcis/HeadlessWB.git C:\Users\xuesh\HeadlessW
 & $P -NoProfile -ExecutionPolicy Bypass -File "C:\Users\xuesh\HeadlessWB-repo\release\join-parts.ps1"
 ```
 
-合并后应得到 `release\HeadlessWB.zip`，大小 **586,131,869 字节**（脚本会校验并告警）。
+合并后应得到 `release\HeadlessWB.zip`，大小 **586,132,087 字节**（脚本会校验并告警）。
 
 ### 0.2 解压到稳定目录
 
