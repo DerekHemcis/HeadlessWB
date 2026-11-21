@@ -1,4 +1,4 @@
-# HeadlessWB 部署自检脚本（在 Windows 上运行）
+﻿# HeadlessWB 部署自检脚本（在 Windows 上运行）
 # 用法: powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\verify.ps1
 $ErrorActionPreference = 'SilentlyContinue'
 
@@ -36,6 +36,25 @@ if (Test-Path $statusFile) {
   try { $out['status'] = (Get-Content $statusFile -Raw | ConvertFrom-Json) } catch { $out['status'] = 'parse-error' }
 } else {
   $out['status'] = '<未生成：先运行 wb-ctl.ps1 status>'
+}
+
+# 2e) 若进程不在，主动探测一次 exe，抓住崩溃原因（如 asar 完整性 FATAL）
+if (-not $out['processRunning']) {
+  try {
+    Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+    $tmpOut = Join-Path $env:TEMP ('hw_out_' + [guid]::NewGuid().ToString('N') + '.txt')
+    $tmpErr = Join-Path $env:TEMP ('hw_err_' + [guid]::NewGuid().ToString('N') + '.txt')
+    $proc = Start-Process -FilePath $exe -ArgumentList '--status' -PassThru -Wait -WindowStyle Hidden -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+    $out['probeExitCode'] = $proc.ExitCode
+    if (Test-Path $tmpErr) {
+      $err = (Get-Content $tmpErr -Raw -ErrorAction SilentlyContinue)
+      if ($err) { $out['probeStderr'] = ($err -split "`n" | Select-Object -First 6) -join ' | ' }
+      Remove-Item $tmpErr -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $tmpOut) { Remove-Item $tmpOut -Force -ErrorAction SilentlyContinue }
+  } catch {
+    $out['probeError'] = $_.Exception.Message
+  }
 }
 
 # 3) 补丁日志

@@ -24,13 +24,13 @@ function run(cmd, args, cwd = __dirname) {
   return r;
 }
 
-step('1/4 补丁语法检查');
+step('1/5 补丁语法检查');
 run(process.execPath, ['--check', path.join(__dirname, 'patch', 'headless-patch.js')]);
 
-step('2/4 冒烟测试（mock electron）');
+step('2/5 冒烟测试（mock electron）');
 run(process.execPath, [path.join(__dirname, 'test', 'run-tests.mjs')]);
 
-step('3/4 产物 asar 校验');
+step('3/5 产物 asar 校验');
 const asarPath = path.join(__dirname, 'dist', 'HeadlessWB', 'resources', 'app.asar');
 if (!fs.existsSync(asarPath)) {
   console.log('未找到 dist/HeadlessWB/resources/app.asar（先跑 node build.mjs）');
@@ -47,7 +47,7 @@ if (!fs.existsSync(asarPath)) {
 }
 
 // ---- 4) 关键 Windows 原生模块必须在解压后的 sidecar 里 ----
-step('4/4 Windows 原生模块齐全性');
+step('4/5 Windows 原生模块齐全性');
 const sidecar = path.join(__dirname, 'dist', 'HeadlessWB', 'resources', 'app.asar.unpacked');
 const critical = [
   'cli/node_modules/koffi/build/koffi/win32_x64/koffi.node',
@@ -64,6 +64,35 @@ for (const rel of critical) {
   else { console.log(`  缺失 ${rel}`); miss++; failed = true; }
 }
 console.log(miss === 0 ? 'Windows 原生模块齐全 ✅' : `缺 ${miss} 个原生模块 ❌`);
+
+// ---- 5) 产物 exe 的 fuse 状态（asar 完整性校验必须已关闭）----
+step('5/5 产物 exe fuse 校验');
+{
+  const exePath = path.join(__dirname, 'dist', 'HeadlessWB', 'HeadlessWB.exe');
+  if (!fs.existsSync(exePath)) { console.log('未找到 HeadlessWB.exe'); failed = true; }
+  else {
+    const SENTINEL = Buffer.from('dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX');
+    const buf = fs.readFileSync(exePath);
+    const i = buf.indexOf(SENTINEL);
+    if (i < 0) { console.log('未找到 fuse 区 ❌'); failed = true; }
+    else {
+      const count = buf[i + SENTINEL.length + 1];
+      const names = ['RunAsNode','EnableCookieEncryption','EnableNodeOptionsEnvironmentVariable',
+        'EnableNodeCliInspectArguments','EnableEmbeddedAsarIntegrityValidation',
+        'OnlyLoadAppFromAsar','LoadBrowserProcessSpecificV8Snapshot','GrantFileProtocolExtraPrivileges'];
+      for (let k = 0; k < count; k++) {
+        console.log(`  [${k}] ${names[k] || ('fuse#' + k)} = ${String.fromCharCode(buf[i + SENTINEL.length + 2 + k])}`);
+      }
+      const integrity = String.fromCharCode(buf[i + SENTINEL.length + 2 + 4]);
+      const onlyAsar = String.fromCharCode(buf[i + SENTINEL.length + 2 + 5]);
+      const ok1 = integrity === '0';
+      const ok2 = onlyAsar === '1';
+      console.log(ok1 ? 'asar 完整性校验已关闭 ✅' : 'asar 完整性校验仍开启 ❌（Windows 上会 FATAL）');
+      console.log(ok2 ? 'OnlyLoadAppFromAsar 保持开启 ✅' : 'OnlyLoadAppFromAsar 被改动 ❌');
+      if (!ok1 || !ok2) failed = true;
+    }
+  }
+}
 
 console.log(failed ? '\n验证未全部通过 ❌' : '\n全部验证通过 ✅');
 process.exit(failed ? 1 : 0);

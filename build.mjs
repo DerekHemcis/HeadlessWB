@@ -103,6 +103,60 @@ function resolve7z() {
 }
 
 // ------------------------------------------------------------
+// Electron fuse 处理
+//   WorkBuddy 的 exe 开启了 EnableEmbeddedAsarIntegrityValidation，
+//   Windows 上同样会校验 app.asar header 的哈希。我们重打包 asar 后哈希必然变化，
+//   启动时 Chromium 会在 Node 之前 FATAL：Integrity check failed for asar archive。
+//   解决：把该 fuse 位改成 '0'（disabled）。fuse 区格式固定：
+//     sentinel(32B) | schemaVer(1) | count(1) | fuse[0..count-1]
+//   每字节 '0'=禁用 '1'=启用 'r'=移除。Electron v1 schema 顺序里索引 4 就是它。
+// ------------------------------------------------------------
+const FUSE_SENTINEL = Buffer.from('dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX');
+const FUSE_IDX_ASAR_INTEGRITY = 4;
+const FUSE_NAME_ASAR_INTEGRITY = 'EnableEmbeddedAsarIntegrityValidation';
+
+function readFuseOffset(exePath) {
+  const buf = fs.readFileSync(exePath);
+  const i = buf.indexOf(FUSE_SENTINEL);
+  if (i < 0) throw new Error('未找到 Electron fuse 区（sentinel 缺失）');
+  const schemaVer = buf[i + FUSE_SENTINEL.length];
+  const count = buf[i + FUSE_SENTINEL.length + 1];
+  if (schemaVer !== 1) throw new Error(`不支持的 fuse schema 版本: ${schemaVer}`);
+  if (count <= FUSE_IDX_ASAR_INTEGRITY) throw new Error(`fuse 数量不足: ${count}`);
+  const off = i + FUSE_SENTINEL.length + 2 + FUSE_IDX_ASAR_INTEGRITY;
+  return { offset: off, count, current: buf[off], buf };
+}
+
+function disableAsarIntegrityFuse(exePath) {
+  const { offset, current, count } = readFuseOffset(exePath);
+  log(`fuse 区: count=${count}, ${FUSE_NAME_ASAR_INTEGRITY} 当前='${String.fromCharCode(current)}'`);
+  if (current === 0x30) { log('fuse 已是 disabled，跳过'); return; }
+  if (current !== 0x31 && current !== 0x72) {
+    throw new Error(`fuse 值异常（0x${current.toString(16)}），拒绝盲改`);
+  }
+  const buf = fs.readFileSync(exePath);
+  buf[offset] = 0x30;
+  fs.writeFileSync(exePath, buf);
+  // 回读校验
+  const after = readFuseOffset(exePath);
+  if (after.current !== 0x30) throw new Error('fuse 写回校验失败');
+  log(`${FUSE_NAME_ASAR_INTEGRITY} 已改为 disabled ✅`);
+}
+
+// ------------------------------------------------------------
+// PowerShell 脚本必须带 UTF-8 BOM
+//   Windows PowerShell 5.1 在没有 BOM 时按系统 ANSI 代码页解码 .ps1，
+//   zh-CN（代码页 936/GBK）机器上会把中文注释/字符串解成乱码并直接语法报错。
+// ------------------------------------------------------------
+function ensureUtf8Bom(filePath) {
+  const raw = fs.readFileSync(filePath);
+  const hasBom = raw.length >= 3 && raw[0] === 0xEF && raw[1] === 0xBB && raw[2] === 0xBF;
+  if (hasBom) return false;
+  fs.writeFileSync(filePath, Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), raw]));
+  return true;
+}
+
+// ------------------------------------------------------------
 // 2) 安装包
 // ------------------------------------------------------------
 async function resolveInstaller() {
@@ -311,6 +365,9 @@ function assemble(appDir) {
   fs.rmSync(exe);
   log('已重命名 HeadlessWB.exe');
 
+  // 关掉 asar 完整性校验（否则重打包后的 asar 在 Windows 上启动即 FATAL）
+  disableAsarIntegrityFuse(newExe);
+
   // 干净新机自包含：把 VC++ 运行库 DLL 复制到应用根目录。
   // Electron 原生模块（node-pty/koffi/wwapi/qimei 等）依赖 vcruntime140*/msvcp140，
   // 全新 Windows 没装 VC++ 运行库会加载失败。应用内已自带这些 DLL（在 sandbox 子目录），
@@ -330,8 +387,10 @@ function assemble(appDir) {
   for (const f of ['install.ps1', 'uninstall.ps1', 'tools/wb-ctl.ps1', 'tools/verify.ps1', 'tools/deploy.ps1', 'README.txt']) {
     const src = path.join(ROOT, f);
     if (fs.existsSync(src)) {
-      fs.mkdirSync(path.dirname(path.join(DIST, f)), { recursive: true });
-      fs.copyFileSync(src, path.join(DIST, f));
+      const dst = path.join(DIST, f);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(src, dst);
+      if (/\.[pP][sS]1$/.test(f) && ensureUtf8Bom(dst)) log(`已为 ${f} 补 UTF-8 BOM`);
     }
   }
   // 版本标记

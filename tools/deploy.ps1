@@ -1,4 +1,4 @@
-# HeadlessWB 一键部署（合并分卷 → 解压 → 安装）
+﻿# HeadlessWB 一键部署（合并分卷 → 解压 → 安装）
 # 用法（在仓库里任意位置执行）：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\xuesh\HeadlessWB-repo\tools\deploy.ps1
 # 可选参数：
@@ -69,6 +69,17 @@ try {
   Write-Host '      tar 解压完成'
 }
 if (-not $expanded) { throw '解压失败' }
+
+# ---- 4.5 兼容 zip 内多一层 HeadlessWB\ 目录 ----
+$nested = Join-Path $InstallDir 'HeadlessWB'
+if ((Test-Path (Join-Path $nested 'HeadlessWB.exe')) -and -not (Test-Path (Join-Path $InstallDir 'HeadlessWB.exe'))) {
+  Write-Host "      检测到多一层目录，正在上移: $nested"
+  Get-ChildItem -Path $nested -Force | ForEach-Object {
+    Move-Item -Path $_.FullName -Destination $InstallDir -Force
+  }
+  Remove-Item -Path $nested -Recurse -Force -ErrorAction SilentlyContinue
+  Write-Host '      已展开为单层目录'
+}
 
 # ---- 5. 校验关键文件并安装 ----
 Write-Host '[5/5] 校验产物...'

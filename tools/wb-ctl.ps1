@@ -1,8 +1,12 @@
-# HeadlessWB 终端控制工具
+﻿# HeadlessWB 终端控制工具
 # 用法:  wb-ctl.ps1 <status|show|login|stop|start>
 param([string]$Command = 'status')
 
 $ErrorActionPreference = 'SilentlyContinue'
+
+# 清掉会让 Electron 退化成纯 Node 的环境变量
+Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+Remove-Item Env:ELECTRON_NO_ATTACH_CONSOLE -ErrorAction SilentlyContinue
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $exe = Join-Path (Split-Path -Parent $dir) 'HeadlessWB.exe'   # tools/wb-ctl.ps1 -> ../HeadlessWB.exe
 if (-not (Test-Path $exe)) { $exe = Join-Path $dir 'HeadlessWB.exe' }  # 同级兜底

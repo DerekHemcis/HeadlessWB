@@ -57,7 +57,7 @@ git clone https://github.com/DerekHemcis/HeadlessWB.git C:\Users\xuesh\HeadlessW
 & $P -NoProfile -ExecutionPolicy Bypass -File "C:\Users\xuesh\HeadlessWB-repo\release\join-parts.ps1"
 ```
 
-合并后应得到 `release\HeadlessWB.zip`，大小 **586,133,143 字节**（脚本会校验并告警）。
+合并后应得到 `release\HeadlessWB.zip`，大小 **585,950,184 字节**（脚本会校验并告警）。
 
 ### 0.2 解压到稳定目录
 
@@ -70,7 +70,10 @@ Get-Item "$InstallDir\HeadlessWB.exe" | Select-Object Length   # 约 204 MB
 Get-Item "$InstallDir\resources\app.asar" | Select-Object Length # 约 165 MB
 ```
 
-**注意**：安装目录固定用 `C:\Users\xuesh\HeadlessWB`（不要放桌面、不要放 repo 里，否则开机自启失效）。
+**注意**：
+- 安装目录固定用 `C:\Users\xuesh\HeadlessWB`（不要放桌面、不要放 repo 里，否则开机自启失效）。
+- 当前 zip **根目录就是应用文件**（`HeadlessWB.exe` 直接在最外层），解压后即符合契约。
+  `tools\deploy.ps1` 还额外兼容了 zip 内多一层 `HeadlessWB\` 的旧布局，会自动上移。
 
 ---
 

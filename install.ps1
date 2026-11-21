@@ -1,4 +1,4 @@
-# HeadlessWB 安装脚本（用户级，无需管理员）
+﻿# HeadlessWB 安装脚本（用户级，无需管理员）
 # 在 HeadlessWB 目录内右键“使用 PowerShell 运行”，或：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 $ErrorActionPreference = 'Stop'
@@ -32,6 +32,15 @@ New-ItemProperty -Path $runKey -Name 'HeadlessWB' -PropertyType String -Value $v
 Write-Host "[1/4] 已注册开机自启 (HKCU Run): $value"
 
 # 3) 首次启动：拉起 daemon 并自动打开浏览器登录页
+#    某些终端/IDE 环境会带 ELECTRON_RUN_AS_NODE=1，会让 Electron 退化成纯 Node，
+#    表现为 "bad option: --login"。启动前必须清掉。
+if (Test-Path Env:ELECTRON_RUN_AS_NODE) {
+  Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+  Write-Host '      已清除 ELECTRON_RUN_AS_NODE'
+}
+if (Test-Path Env:ELECTRON_NO_ATTACH_CONSOLE) {
+  Remove-Item Env:ELECTRON_NO_ATTACH_CONSOLE -ErrorAction SilentlyContinue
+}
 Write-Host '[2/4] 启动 HeadlessWB 并打开浏览器登录页...'
 Start-Process -FilePath $exe -ArgumentList '--login'
 

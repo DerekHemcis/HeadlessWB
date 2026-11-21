@@ -1,4 +1,4 @@
-# HeadlessWB 卸载脚本
+﻿# HeadlessWB 卸载脚本
 $ErrorActionPreference = 'SilentlyContinue'
 
 # 1) 停止进程

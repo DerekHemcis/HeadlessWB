@@ -118,6 +118,7 @@ HeadlessWB/
 
 | 风险 | 说明 | 对策 |
 |------|------|------|
+| asar 完整性校验（已解决）| 见第九节第 8 条：Electron 37 在 Windows 上确实校验，build 已关 fuse | `verify-build.mjs` 第 5 步断言 |
 | 官方更新覆盖补丁 | 已通过禁更新 + Run 键指向我们的目录规避；官方更新器被禁后不会再触碰该目录 | 手动更新流程 |
 | 版本升级后锚点失效 | main-bootstrap 是混淆产物，改版后字符串锚点可能变 | build.mjs 里每个补丁点带断言，构建失败即提示人工适配 |
 | 提示音残留 | imTipSound 在渲染进程内，主进程层可能拦不全 | 已知：无窗口时渲染不活跃，实际触发概率低；实测若仍响，再在 session 层静音 |
@@ -155,6 +156,25 @@ HeadlessWB/
 5. **渲染进程 HTML5 通知**：在 `session.defaultSession.setPermissionRequestHandler` 拒绝 `notifications` 权限，堵住主进程 `Notification` 哑化之外的漏网路径。
 6. **冒烟测试 19 项断言全过**（`test/run-tests.mjs`，mock electron）：headless 压制 12 项、show 解禁、login 加载、status 退出、second-instance 解禁、更新拦截 204、正常请求放行。
 7. **动态 `import('electron')` 审计**（2026-11-22 增补）：minified 代码里有 22 处 `import(`electron`)`（index/main-bootstrap/shell-env-async/rpc-connection/cdp-profiler/menu-builder/dev-env-actions2/localstorage-migration），会绕过 `Module.prototype.require` 垫片。逐处核对：**没有任何一处动态 import 解构 Tray/Notification**（这两个隐蔽关键对象只走 require→代理→哑对象）；`BrowserWindow` 动态 import 创建的窗口仍受原型 `show` 压制。但 `net.fetch`（shell-env-async 反馈服务、rpc-connection 扩展 feed）与 `dialog.showMessageBox`（更新确认、自检）确实可经动态 import 直达真实对象——因此补丁已改为**直接改真实对象的 `net.fetch` / `dialog.showMessageBox*` / `shell.openExternal` 方法**，require 代理、动态 import、直接引用三条路径一次性全覆盖（测试已加 3 条断言证明真实对象被替换）。
-8. **重打包保真性核对**（2026-11-22 增补）：把原版 asar 与新产物的条目列表做全量 diff → 新增 0 个、缺失 112 个（61 个跨平台 sidecar 文件 + 51 个因此变空的目录）。逐个确认这些**在官方 Windows 安装包里本来就不存在**（例：`koffi/build/koffi/win32_arm64`、`wwapi-electron/prebuilds/darwin-*` 均不在 Windows 包内），因此不是我们丢文件，而是 Windows 版官方也未分发。`verify-build.mjs` 已加第 4 步：逐个断言 6 个关键 Windows 原生模块（koffi win32_x64 ×2、node-pty ×2、im-napi、turing_sdk）在解压产物中存在。
+8. **⚠️ 重大修正：asar 完整性校验在 Windows 上确实生效**（2026-11-22 真机实测推翻先前判断）
+   先前依据 Electron 文档"`EnableEmbeddedAsarIntegrityValidation` 仅 macOS 生效"认为 Windows 不受影响，**这是错的**。
+   真机启动即 FATAL：`electron\shell\common\asar\asar_util.cc:143] Integrity check failed for asar archive`。
+   结论：Electron 37 的该 fuse 在 Windows 上同样校验 asar header 哈希；重新打包必然改变哈希 → 启动即崩，
+   且发生在 Node 之前，`main/index.js` 的补丁注入根本没机会执行（`patch.log` 不生成即此因）。
+   修复：`build.mjs` 新增 `disableAsarIntegrityFuse()`，直接改写 exe 中 fuse 区第 4 位 `'1'→'0'`，
+   回读校验；`verify-build.mjs` 增加第 5 步断言该位为 `'0'` 且 `OnlyLoadAppFromAsar` 仍为 `'1'`。
 
-9. **与原版 WorkBuddy 共存的单实例冲突**（2026-11-22 增补）：无头版沿用原版 userData 目录（好处是已登录态直接复用、免重新扫码），但 Electron `requestSingleInstanceLock` 以 userData 为锁——**原版与无头版不能同时运行**，否则后启动者抢锁失败退出。原版自启 Run 键名是 `WorkBuddy.WorkBuddy`（`resolveWin32AppUserModelId`）。因此 `install.ps1` 现在会：停掉 `WorkBuddy`/`HeadlessWB` 进程 → 删除原版 `WorkBuddy`/`WorkBuddy.WorkBuddy` 两个 Run 键 → 再写 `HeadlessWB` Run 键；`verify.ps1` 同步检查旧键已清、原版进程未跑。
+9. **PowerShell 脚本必须带 UTF-8 BOM**（2026-11-22 真机实测）：仓库原为 UTF-8 无 BOM，
+   在 zh-CN（代码页 936/GBK）的 Windows PowerShell 5.1 上按 ANSI 解码 → 中文注释/字符串变乱码 →
+   `The string is missing the terminator` 解析失败，6 个脚本里 4 个直接无法执行。
+   修复：仓库内 6 个 `.ps1` 全部改为 UTF-8 with BOM，且 `build.mjs` 复制时再做一次兜底补 BOM。
+
+10. **zip 布局**：早期 zip 带顶层 `HeadlessWB\`，`Expand-Archive` 后多一层，与文档契约不符。
+    已改为 zip 根即应用文件；`deploy.ps1` 同时兼容旧布局（自动上移）。
+
+11. **`ELECTRON_RUN_AS_NODE` 环境变量**：若启动环境带此变量，Electron 会退化成纯 Node，
+    表现为 `bad option: --login`。`install.ps1` / `wb-ctl.ps1` 已在启动前主动清除。
+
+12. **重打包保真性核对**（2026-11-22 增补）：把原版 asar 与新产物的条目列表做全量 diff → 新增 0 个、缺失 112 个（61 个跨平台 sidecar 文件 + 51 个因此变空的目录）。逐个确认这些**在官方 Windows 安装包里本来就不存在**（例：`koffi/build/koffi/win32_arm64`、`wwapi-electron/prebuilds/darwin-*` 均不在 Windows 包内），因此不是我们丢文件，而是 Windows 版官方也未分发。`verify-build.mjs` 已加第 4 步：逐个断言 6 个关键 Windows 原生模块（koffi win32_x64 ×2、node-pty ×2、im-napi、turing_sdk）在解压产物中存在。
+
+13. **与原版 WorkBuddy 共存的单实例冲突**（2026-11-22 增补）：无头版沿用原版 userData 目录（好处是已登录态直接复用、免重新扫码），但 Electron `requestSingleInstanceLock` 以 userData 为锁——**原版与无头版不能同时运行**，否则后启动者抢锁失败退出。原版自启 Run 键名是 `WorkBuddy.WorkBuddy`（`resolveWin32AppUserModelId`）。因此 `install.ps1` 现在会：停掉 `WorkBuddy`/`HeadlessWB` 进程 → 删除原版 `WorkBuddy`/`WorkBuddy.WorkBuddy` 两个 Run 键 → 再写 `HeadlessWB` Run 键；`verify.ps1` 同步检查旧键已清、原版进程未跑。

@@ -1,4 +1,4 @@
-# HeadlessWB 分卷合并脚本（在雷蛇上运行）
+﻿# HeadlessWB 分卷合并脚本（在雷蛇上运行）
 # 把 release/parts/ 下的 HeadlessWB.zip.part-* 合并成 HeadlessWB.zip
 # 用法: powershell -NoProfile -ExecutionPolicy Bypass -File .\release\join-parts.ps1
 $ErrorActionPreference = 'Stop'
@@ -21,8 +21,8 @@ try {
   $fs.Close()
 }
 
-$expectedSize = 586133143
-$expectedSha  = 'BB34932E81BB444B5438BEB9B75A0DA5C6DA6CC60E960E6AE835D2F15398D798'
+$expectedSize = 585950184
+$expectedSha  = '7598281D1EC94AAE8391709BEF5F4D490CBB432133392167A15DC9E989889686'
 
 $actualSize = (Get-Item $outZip).Length
 Write-Host ("合并完成: {0} 字节 (预期 {1})" -f $actualSize, $expectedSize)
