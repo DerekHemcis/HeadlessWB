@@ -736,6 +736,45 @@
     return JSON.stringify({ r: 'none', diag: diag });
   })();`;
 
+  // ============================================================
+  // Fiber 直调兜底：从 React fiber 的 props 里直接取 onClick 调用。
+  //   绕开 DOM 事件分发与 isTrusted 限制，是"点了没反应"的最强兜底。
+  // ============================================================
+  const FIBER_CLICK_JS = `(function () {
+    function findBtn() {
+      var cands = ['.login-view__button', '.login-view button', '.login-view__main button'];
+      for (var i = 0; i < cands.length; i++) {
+        var el = document.querySelector(cands[i]);
+        if (el) return el;
+      }
+      var all = document.querySelectorAll('button,[role=button],[class*=button]');
+      for (var k = 0; k < all.length; k++) {
+        var t = (all[k].innerText || '').replace(/\\s+/g, '');
+        if (t === '登录' || t.indexOf('登录') === 0) return all[k];
+      }
+      return null;
+    }
+    try {
+      var el = findBtn();
+      if (!el) return JSON.stringify({ r: 'fiber:no-button' });
+      var key = Object.keys(el).filter(function (k) {
+        return k.indexOf('__reactProps$') === 0 || k.indexOf('__reactEventHandlers$') === 0;
+      })[0];
+      if (!key) return JSON.stringify({ r: 'fiber:no-props', tag: el.tagName });
+      var props = el[key] || {};
+      var handler = props.onClick || props.onMouseDown || props.onPointerDown;
+      if (typeof handler !== 'function') {
+        return JSON.stringify({ r: 'fiber:no-onclick', keys: Object.keys(props).slice(0, 12) });
+      }
+      handler({
+        preventDefault: function () {}, stopPropagation: function () {},
+        nativeEvent: {}, target: el, currentTarget: el, button: 0,
+        type: 'click', isTrusted: false, persist: function () {}
+      });
+      return JSON.stringify({ r: 'fiber:onClick-called', tag: el.tagName + '.' + String(el.className || '').slice(0, 40) });
+    } catch (e) { return JSON.stringify({ r: 'fiber:err', msg: String(e && e.message) }); }
+  })();`;
+
   const LOGIN_CLICK_JS = CLICK_JS_TEMPLATE('[]', 'login');
   const ADVANCE_CLICK_JS = CLICK_JS_TEMPLATE('[]', 'advance');
   const COPY_LINK_JS = CLICK_JS_TEMPLATE('[]', 'copy');
@@ -841,7 +880,22 @@
           log(`login: 登录卡片已挂载（probe #${probeCount}），开始点击`);
           clickLogin(true);
         } else {
-          setTimeout(probe, at(2000));
+          // 点击后仍无跳转 → 用 fiber 直调 onClick 再试（最强兜底）
+    const fiberFallback = () => {
+      if (loginSucceeded()) return;
+      log('login: DOM click 未触发跳转，尝试 fiber 直调 onClick');
+      runJsInWindow(FIBER_CLICK_JS).then(r => {
+        log('  fiber ->', prettyOneLine(r));
+        setTimeout(() => { if (loginSucceeded()) onLoginSuccess(); }, at(2500));
+      });
+    };
+    [6000, 16000, 26000, 40000].forEach((ms, i) => setTimeout(() => {
+      if (loginSucceeded() || !clickedOnce.v) return;
+      log(`fiber fallback #${i + 1}`);
+      fiberFallback();
+    }, at(ms)));
+
+    setTimeout(probe, at(2000));
         }
       });
     };
