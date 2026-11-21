@@ -312,6 +312,34 @@
   // URL 观测：真机提醒过一种可能——应用可能用 window.open / 新建窗口打开登录页，
   // 而不是 shell.openExternal，那样我们就看不到。这里把相关 URL 全部记下来。
   // ============================================================
+  // IPC 观测：renderer 的 openAuth.login 是经 workbuddy:invoke 桥到主进程的。
+  // 记下这类调用的入参与失败原因，用来判定"点击到底有没有触发登录逻辑"。
+  try {
+    const ipc = realElectron.ipcMain;
+    if (ipc && typeof ipc.handle === 'function') {
+      const realHandle = ipc.handle.bind(ipc);
+      ipc.handle = function (channel, listener) {
+        if (channel === 'workbuddy:invoke') {
+          return realHandle(channel, function (event, ...args) {
+            let preview = '';
+            try { preview = JSON.stringify(args).slice(0, 220); } catch (e) { preview = '<unserializable>'; }
+            if (/openAuth|login|auth/i.test(preview)) log('ipc invoke:', preview);
+            const r = listener(event, ...args);
+            if (r && typeof r.then === 'function') {
+              return r.then(
+                (v) => { if (/openAuth|login|auth/i.test(preview)) log('ipc result ok'); return v; },
+                (e) => { if (/openAuth|login|auth/i.test(preview)) log('ipc result ERR:', String(e && e.message || e).slice(0, 200)); throw e; }
+              );
+            }
+            return r;
+          });
+        }
+        return realHandle(channel, listener);
+      };
+      log('ipcMain.handle wrapped (login invoke observability)');
+    }
+  } catch (e) { log('ipcMain wrap failed', e.message); }
+
   try {
     app.on('web-contents-created', (ev, wc) => {
       try {
