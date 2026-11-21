@@ -24,6 +24,7 @@ node build.mjs
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
    ```
+   （从 GitHub 仓库部署时，用 `tools\deploy.ps1` 一条命令完成合并分卷→解压→安装）
 3. 浏览器会自动弹出官方登录页，扫码登录后即进入完全静默状态。
 
 ### 干净新机自包含（无需装任何东西）

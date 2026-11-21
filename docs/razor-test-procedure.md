@@ -15,9 +15,11 @@
 
 步骤：
 1. 克隆仓库：git clone https://github.com/DerekHemcis/HeadlessWB.git C:\Users\xuesh\HeadlessWB-repo
-2. 通读 C:\Users\xuesh\HeadlessWB-repo\docs\razor-test-procedure.md，然后严格照它执行（它会让你合并分卷、解压、装自启、跑校验）。
-3. 合并分卷必须成功（SHA256 校验通过），解压到 C:\Users\xuesh\HeadlessWB。
-4. 执行 install.ps1 后等 60 秒，然后运行 tools\verify.ps1 并把 JSON 输出完整保留。
+2. 一条命令完成合并+解压+安装：
+   powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\xuesh\HeadlessWB-repo\tools\deploy.ps1
+   （它会自动合并分卷并做 SHA256 校验、解压到 C:\Users\xuesh\HeadlessWB、校验产物、执行 install.ps1）
+3. 等 60 秒，然后运行 tools\verify.ps1 并把 JSON 输出完整保留。
+4. 详细判定标准和失败对照见 C:\Users\xuesh\HeadlessWB-repo\docs\razor-test-procedure.md。
 5. 遇到需要人操作的两处，把问题抛给我（用户）并等我回复：
    a) 浏览器弹出登录页时，需要我扫码；
    b) 手机 App 远控确认。
@@ -34,7 +36,8 @@
 1. 雷蛇上有 git 和 PowerShell 5.1（雷蛇没有 pwsh，全路径见下）。
 2. 原版 WorkBuddy 已卸载（用户已确认）。
 
-### 0.1 拉取仓库并合并分卷
+### 0.1 拉取仓库
+
 
 ```powershell
 $P = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -47,7 +50,7 @@ git clone https://github.com/DerekHemcis/HeadlessWB.git C:\Users\xuesh\HeadlessW
 & $P -NoProfile -ExecutionPolicy Bypass -File "C:\Users\xuesh\HeadlessWB-repo\release\join-parts.ps1"
 ```
 
-合并后应得到 `release\HeadlessWB.zip`，大小 **586,129,837 字节**（脚本会校验并告警）。
+合并后应得到 `release\HeadlessWB.zip`，大小 **586,131,869 字节**（脚本会校验并告警）。
 
 ### 0.2 解压到稳定目录
 

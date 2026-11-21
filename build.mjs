@@ -327,7 +327,7 @@ function assemble(appDir) {
   }
 
   // 脚本
-  for (const f of ['install.ps1', 'uninstall.ps1', 'tools/wb-ctl.ps1', 'tools/verify.ps1', 'README.txt']) {
+  for (const f of ['install.ps1', 'uninstall.ps1', 'tools/wb-ctl.ps1', 'tools/verify.ps1', 'tools/deploy.ps1', 'README.txt']) {
     const src = path.join(ROOT, f);
     if (fs.existsSync(src)) {
       fs.mkdirSync(path.dirname(path.join(DIST, f)), { recursive: true });
