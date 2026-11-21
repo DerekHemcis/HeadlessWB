@@ -210,6 +210,29 @@ HeadlessWB/
     另加：每次点击都把 DOM 诊断写进日志（`url` / `readyState` / `title` / 元素总数 / 可见短文本前 25 条），
     这样下次真机报告能直接看到登录页到底长什么样，而不是只看到 `none`。
 
-15. **重打包保真性核对**（2026-11-22 增补）：把原版 asar 与新产物的条目列表做全量 diff → 新增 0 个、缺失 112 个（61 个跨平台 sidecar 文件 + 51 个因此变空的目录）。逐个确认这些**在官方 Windows 安装包里本来就不存在**（例：`koffi/build/koffi/win32_arm64`、`wwapi-electron/prebuilds/darwin-*` 均不在 Windows 包内），因此不是我们丢文件，而是 Windows 版官方也未分发。`verify-build.mjs` 已加第 4 步：逐个断言 6 个关键 Windows 原生模块（koffi win32_x64 ×2、node-pty ×2、im-napi、turing_sdk）在解压产物中存在。
+15. **登录点击命中祖先容器 → 点了没反应**（2026-11-22 第四轮真机实测）
+    第四轮日志显示点击"成功"（`-> clicked:WorkBuddy，我帮你 / 登录`），但**没有任何 openExternal**。
+    根因：文本匹配用 `innerText.indexOf('登录') >= 0` 且只限长度 ≤24，命中的是
+    同时包含标题「WorkBuddy，我帮你」和「登录」的**祖先容器 `.login-view__main`**，它没有 onClick。
+    同时确认登录页真实结构（从渲染层源码 `src-zlkEN4bK.js` 读出）：
+    ```
+    <div class="login-view"><div class="login-view__main">
+      <button class="login-view__button">{t('login.signIn')}</button>
+      <div class="login-view__waiting-hint"><div class="login-view__waiting-hint-actions"><button>{t('login.copyLink')}</button>
+    ```
+    修复四条：
+    a) **类名优先**：直接点 `.login-view__button`（确定性，不依赖文案）；
+    b) **只查叶子节点** + `el.closest('button,[role=button],[class*=button],[tabindex],a')` 向上取可点元素；
+    c) **探针轮询**：真机证据显示登录卡片约 14 秒才挂载（els 768→787→912），
+       改为每 2 秒探测 `.login-view__button` 是否存在，就绪立刻点，最多等 60 秒；
+    d) **补发真实输入事件**：拿到命中元素视口坐标后，用 `webContents.sendInputEvent`
+       发 mouseMove/mouseDown/mouseUp（部分 React 组件只认 isTrusted 事件）。
+    另外新增观测：`web-contents-created` 的 `will-navigate` / `did-create-window` 日志 +
+    `session.webRequest.onBeforeRequest` 过滤 `client-login|device/auth/code|/login`，
+    以防应用改用 window.open 而非 shell.openExternal 打开登录页（那样原补丁看不到）。
+    并确认：`login.copyLink` 兜底面板仅在 `environmentType === 'local'` 才渲染，
+    生产环境不存在 → 剪贴板路线天然不可用，主路径必须靠点按钮。
 
-16. **与原版 WorkBuddy 共存的单实例冲突**（2026-11-22 增补）：无头版沿用原版 userData 目录（好处是已登录态直接复用、免重新扫码），但 Electron `requestSingleInstanceLock` 以 userData 为锁——**原版与无头版不能同时运行**，否则后启动者抢锁失败退出。原版自启 Run 键名是 `WorkBuddy.WorkBuddy`（`resolveWin32AppUserModelId`）。因此 `install.ps1` 现在会：停掉 `WorkBuddy`/`HeadlessWB` 进程 → 删除原版 `WorkBuddy`/`WorkBuddy.WorkBuddy` 两个 Run 键 → 再写 `HeadlessWB` Run 键；`verify.ps1` 同步检查旧键已清、原版进程未跑。
+16. **重打包保真性核对**（2026-11-22 增补）：把原版 asar 与新产物的条目列表做全量 diff → 新增 0 个、缺失 112 个（61 个跨平台 sidecar 文件 + 51 个因此变空的目录）。逐个确认这些**在官方 Windows 安装包里本来就不存在**（例：`koffi/build/koffi/win32_arm64`、`wwapi-electron/prebuilds/darwin-*` 均不在 Windows 包内），因此不是我们丢文件，而是 Windows 版官方也未分发。`verify-build.mjs` 已加第 4 步：逐个断言 6 个关键 Windows 原生模块（koffi win32_x64 ×2、node-pty ×2、im-napi、turing_sdk）在解压产物中存在。
+
+17. **与原版 WorkBuddy 共存的单实例冲突**（2026-11-22 增补）：无头版沿用原版 userData 目录（好处是已登录态直接复用、免重新扫码），但 Electron `requestSingleInstanceLock` 以 userData 为锁——**原版与无头版不能同时运行**，否则后启动者抢锁失败退出。原版自启 Run 键名是 `WorkBuddy.WorkBuddy`（`resolveWin32AppUserModelId`）。因此 `install.ps1` 现在会：停掉 `WorkBuddy`/`HeadlessWB` 进程 → 删除原版 `WorkBuddy`/`WorkBuddy.WorkBuddy` 两个 Run 键 → 再写 `HeadlessWB` Run 键；`verify.ps1` 同步检查旧键已清、原版进程未跑。

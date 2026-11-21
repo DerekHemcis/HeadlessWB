@@ -31,11 +31,29 @@ $vc = @('vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll') | ForEach-Object
 $out['vcRuntimeDlls'] = $vc -join ', '
 
 # 2d) status.json（--status 写出的结构化状态）
+#     真机教训：status.json 可能是几轮之前的陈旧文件，会误导判断。
+#     先主动刷新一次，再校验 runningInstance 是否真的存在于进程列表。
 $statusFile = Join-Path $home '.workbuddy\logs\headlesswb\status.json'
+Remove-Item $statusFile -Force -ErrorAction SilentlyContinue
+try {
+  Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+  $sp = Start-Process -FilePath $exe -ArgumentList '--status' -PassThru -Wait -WindowStyle Hidden
+  Start-Sleep -Milliseconds 300
+  $out['statusProbeExit'] = $sp.ExitCode
+} catch { $out['statusProbeError'] = $_.Exception.Message }
+
 if (Test-Path $statusFile) {
-  try { $out['status'] = (Get-Content $statusFile -Raw | ConvertFrom-Json) } catch { $out['status'] = 'parse-error' }
+  try {
+    $st = Get-Content $statusFile -Raw | ConvertFrom-Json
+    $out['status'] = $st
+    $out['statusFresh'] = $true
+    $liveIds = @()
+    try { $liveIds = @(Get-Process -Name 'HeadlessWB' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }) } catch {}
+    $out['statusPidIsLive'] = ($st.runningInstance -and ($liveIds -contains [int]$st.runningInstance))
+  } catch { $out['status'] = 'parse-error'; $out['statusFresh'] = $false }
 } else {
-  $out['status'] = '<未生成：先运行 wb-ctl.ps1 status>'
+  $out['status'] = '<未生成>'
+  $out['statusFresh'] = $false
 }
 
 # 2e) 若进程不在，主动探测一次 exe，抓住崩溃原因（如 asar 完整性 FATAL）

@@ -309,6 +309,39 @@
   }
 
   // ============================================================
+  // URL 观测：真机提醒过一种可能——应用可能用 window.open / 新建窗口打开登录页，
+  // 而不是 shell.openExternal，那样我们就看不到。这里把相关 URL 全部记下来。
+  // ============================================================
+  try {
+    app.on('web-contents-created', (ev, wc) => {
+      try {
+        wc.on('will-navigate', (e, url) => log('navigate:', String(url).slice(0, 160)));
+      } catch (e) {}
+      try {
+        wc.on('did-create-window', (w) => { try { log('window-created:', String(w.webContents.getURL()).slice(0, 160)); } catch (e) {} });
+      } catch (e) {}
+    });
+    app.on('browser-window-created', () => {});
+    log('url observers installed');
+  } catch (e) { log('url observers failed', e.message); }
+
+  try {
+    app.whenReady().then(() => {
+      const ses = realElectron.session && realElectron.session.defaultSession;
+      if (ses && ses.webRequest && ses.webRequest.onBeforeRequest) {
+        ses.webRequest.onBeforeRequest({ urls: ['*://*/**'] }, (details, cb) => {
+          const u = String(details.url || '');
+          if (/client-login|device\/auth\/code|\/login/i.test(u)) {
+            log('request:', u.replace(/([?&]code=)[^&]+/i, '$1***').slice(0, 200));
+          }
+          cb({});
+        });
+        log('webRequest login-url observer installed');
+      }
+    }).catch(() => {});
+  } catch (e) { log('webRequest observer failed', e.message); }
+
+  // ============================================================
   // app 行为补丁（真实 app 实例上的方法可写）
   // ============================================================
   try { app.setBadgeCount = function () {}; } catch (e) {}
@@ -550,6 +583,15 @@
       diag.title = String(document.title || '').slice(0, 80);
       diag.ready = String(document.readyState);
       diag.total = document.querySelectorAll('*').length;
+      var mk = String(location.href).match(/[?&](wbSeedToken|seedToken)=([0-9a-f]+)/i);
+      if (mk) diag.seedToken = mk[2].slice(0, 12) + '…';
+      diag.loginBtn = (function () {
+        try {
+          var b = document.querySelector('.login-view__button');
+          if (!b) return 'absent';
+          return (b.tagName || '') + '.' + String(b.className || '').slice(0, 50) + '|' + norm(b.innerText || b.textContent || '').slice(0, 20);
+        } catch (e) { return 'err'; }
+      })();
     } catch (e) {}
 
     // ===== 策略 1：已知类名（从渲染层源码确证）=====
@@ -591,6 +633,10 @@
             }
           } catch (e) {}
           diag.hits.push('class:' + knownSel[s0]);
+          try {
+            var rc0 = el0.getBoundingClientRect();
+            diag.pt = { x: Math.round(rc0.left + rc0.width / 2), y: Math.round(rc0.top + rc0.height / 2), w: Math.round(rc0.width) };
+          } catch (e) {}
           try { diag.loginViewText = String((docs0[d0].querySelector('.login-view') || {}).innerText || '').slice(0, 200); } catch (e) {}
           return JSON.stringify({ r: 'clicked-class:' + knownSel[s0] + ':' + norm(el0.innerText || el0.textContent || ''), diag: diag });
         }
@@ -604,6 +650,9 @@
       var els = collect(docs[d]);
       for (var i = 0; i < els.length; i++) {
         var el = els[i];
+        // 真机教训：只按文本 indexOf 会命中「标题+按钮」的祖先容器，点它没反应。
+        // 只认叶子节点（无子元素），再向上 closest 找真正可点的元素。
+        if (el.children && el.children.length > 0) continue;
         var t = norm(el.innerText || el.textContent || '');
         if (!t || t.length > 24) continue;         // 只要短文本（按钮级）
         if (diag.texts.length < 25 && t.length <= 24 && visible(el)) {
@@ -613,6 +662,11 @@
           var hit = (MODE === 'copy') ? (t === TARGET[j]) : (t.indexOf(TARGET[j]) >= 0);
           if (hit) {
             tried++;
+            try {
+              var clickable = el.closest && el.closest(
+                'button,[role=button],[class*=button],[class*=Button],[class*=oneid],[tabindex],a');
+              if (clickable) el = clickable;
+            } catch (e) {}
             try { el.scrollIntoView && el.scrollIntoView({ block: 'center' }); } catch (e) {}
             try { el.click(); } catch (e) {}
             // 有些组件只认真实指针事件
@@ -631,6 +685,11 @@
               }
             } catch (e) {}
             diag.hits.push(t);
+            try {
+              var rc1 = el.getBoundingClientRect();
+              diag.pt = { x: Math.round(rc1.left + rc1.width / 2), y: Math.round(rc1.top + rc1.height / 2), w: Math.round(rc1.width) };
+              diag.tag = (el.tagName || '') + '.' + String(el.className || '').slice(0, 60);
+            } catch (e) {}
             return JSON.stringify({ r: 'clicked:' + t, diag: diag });
           }
         }
@@ -672,16 +731,34 @@
   }
 
   // 解析点击结果并记录 DOM 诊断（真机排障靠它）
-  function handleClickResult(tag, raw) {
+  function prettyOneLine(v) {
+    return String(v == null ? '' : v).replace(/[\r\n]+/g, ' | ').replace(/\s*\|\s*\|\s*/g, ' | ').slice(0, 400);
+  }
+
+  // 真实输入事件点击（部分 React 组件只认 isTrusted 事件）
+  function sendRealClick(win, pt) {
+    if (!win || !pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return;
+    try {
+      const wc = win.webContents;
+      wc.sendInputEvent({ type: 'mouseMove', x: pt.x, y: pt.y });
+      wc.sendInputEvent({ type: 'mouseDown', x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
+      wc.sendInputEvent({ type: 'mouseUp', x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
+      log(`   sendInputEvent click @(${pt.x},${pt.y}) w=${pt.w}`);
+    } catch (e) { log('   sendInputEvent failed:', e.message); }
+  }
+
+  function handleClickResult(tag, raw, win) {
     let obj = null;
-    try { obj = JSON.parse(String(raw)); } catch (e) { log(tag, 'raw ->', String(raw).slice(0, 200)); return; }
+    try { obj = JSON.parse(String(raw)); } catch (e) { log(tag, 'raw ->', prettyOneLine(raw)); return; }
     const d = obj.diag || {};
-    log(tag, '->', obj.r);
-    log(`   DOM: url=${d.href} ready=${d.ready} title=${d.title} els=${d.total} loginView=${d.hasLoginView}`);
-    if (d.loginViewText) log('   login-view 文本: ' + d.loginViewText.replace(/\s+/g, ' ').slice(0, 180));
-    if (Array.isArray(d.texts) && d.texts.length) log('   可见短文本: ' + d.texts.join(' | '));
-    if (obj.r && String(obj.r).indexOf('clicked') === 0) {
-      // 点到了：稍等再确认浏览器是否被打开
+    log(tag, '->', prettyOneLine(obj.r));
+    log(`   DOM: url=${d.href} ready=${d.ready} els=${d.total} loginView=${d.hasLoginView} btn=${d.loginBtn}${d.seedToken ? ' seed=' + d.seedToken : ''}`);
+    if (d.loginViewText) log('   login-view 文本: ' + prettyOneLine(d.loginViewText));
+    if (Array.isArray(d.texts) && d.texts.length) log('   可见短文本: ' + prettyOneLine(d.texts.join(' | ')));
+    const clicked = obj.r && String(obj.r).indexOf('clicked') === 0;
+    if (clicked) {
+      // 第一层：JS click 已发；再用真实输入事件补一枪（坐标是命中元素的中心）
+      if (d.pt) sendRealClick(win || pickLiveWindow(), d.pt);
       setTimeout(() => { if (loginSucceeded()) onLoginSuccess(); }, 2500);
     }
   }
@@ -710,12 +787,58 @@
     const SCALE = process.env.HEADLESSWB_LOGIN_FAST === '1' ? 0.05 : 1;
     const at = (ms) => Math.round(ms * SCALE);
 
-    // 更密的节奏：SPA 首屏可能要 10~30 秒才渲染出登录按钮
-    const loginAttempts = [3000, 8000, 14000, 20000, 28000, 36000, 45000];
-    loginAttempts.forEach((ms, i) => setTimeout(() => {
+    // 真机证据：登录卡片约 14 秒才挂载（els 768→787→912），过早点击必然落空。
+    // 改为「探针轮询」：每 2 秒检查一次，一旦出现登录按钮/登录卡片就立刻点，最多等到 60 秒。
+    const PROBE_JS = `(function(){
+      try {
+        var btn = document.querySelector('.login-view__button');
+        var view = document.querySelector('.login-view');
+        var body = document.body ? document.body.innerText : '';
+        var ready = !!(btn || view) || /服务条款|隐私政策|登录/.test(body);
+        return JSON.stringify({ ready: ready, url: String(location.href).slice(0,120), els: document.querySelectorAll('*').length });
+      } catch (e) { return JSON.stringify({ ready: false, err: String(e && e.message) }); }
+    })();`;
+    let probeCount = 0;
+    const clickedOnce = { v: false };
+    const probe = () => {
+      if (loginSucceeded() || clickedOnce.v) return;
+      probeCount++;
+      if (probeCount > 30) return;   // 60s 上限
+      runJsInWindow(PROBE_JS).then(raw => {
+        let pr = {};
+        try { pr = JSON.parse(String(raw)); } catch (e) {}
+        if (probeCount <= 3 || probeCount % 5 === 0) log(`probe #${probeCount} ready=${pr.ready} els=${pr.els}`);
+        if (pr.ready) {
+          clickedOnce.v = true;
+          log(`login: 登录卡片已挂载（probe #${probeCount}），开始点击`);
+          clickLogin(true);
+        } else {
+          setTimeout(probe, at(2000));
+        }
+      });
+    };
+
+    const clickLogin = (first) => {
       if (loginSucceeded()) return;
-      log(`login try #${i + 1} @${ms}ms: click 登录`);
-      runJsInWindow(LOGIN_CLICK_JS).then(r => handleClickResult('  ', r));
+      log('login: click 登录');
+      runJsInWindow(LOGIN_CLICK_JS).then(r => {
+        handleClickResult('  ', r, pickLiveWindow());
+        let ok = false;
+        try { ok = String(JSON.parse(String(r)).r).indexOf('clicked') === 0; } catch (e) {}
+        if (!ok && first) {
+          // 卡片刚挂载但按钮还没就绪，200ms 后再试一次
+          setTimeout(() => clickLogin(false), at(800));
+        }
+      });
+    };
+
+    setTimeout(probe, at(2000));
+
+    // 备用节奏：即使探针没判 ready，也在几个时间点硬点一次
+    [12000, 20000, 30000, 42000].forEach((ms, i) => setTimeout(() => {
+      if (loginSucceeded() || clickedOnce.v) return;
+      log(`login retry #${i + 1} @${ms}ms`);
+      clickLogin(false);
     }, at(ms)));
 
     // 登录页可能先出现「同意/继续」引导，点它推进
@@ -732,7 +855,7 @@
       if (loginSucceeded()) return;
       log(`copy-link try #${i + 1} @${ms}ms`);
       runJsInWindow(COPY_LINK_JS).then(r => {
-        handleClickResult('  copy', r);
+        handleClickResult('  copy', r, pickLiveWindow());
         setTimeout(() => {
           if (loginSucceeded()) return;
           openLoginFromClipboard('  clipboard:');
@@ -748,7 +871,7 @@
         openExternal('https://www.workbuddy.cn/console/client-login');
       }
       setTimeout(() => { loginFlowInProgress = false; log('runLoginFlow: released'); }, at(2000));
-    }, at(50000));
+    }, at(62000));
   }
 
   if (MODE.login) {
