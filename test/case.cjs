@@ -192,6 +192,14 @@ setTimeout(() => {
       assert('real dialog.showMessageBox patched', mockDialog.showMessageBox !== origMockBox);
       assert('real shell.openExternal patched', mockShell.openExternal !== origMockOpen);
 
+      // child_process 过滤：办公文件关联的 reg 写入必须被拦，协议注册必须放行
+      const cp = require('child_process');
+      const blocked = cp.spawnSync('reg.exe', ['ADD', 'HKCU\\Software\\Classes\\Applications\\HeadlessWB.exe\\shell\\open\\command', '/ve', '/d', 'x', '/f']);
+      assert('office file-assoc reg write blocked', blocked && blocked.status === 0 && !blocked.error);
+      const allowed = cp.spawnSync('reg.exe', ['ADD', 'HKCU\\Software\\Classes\\workbuddy', '/ve', '/d', 'x', '/f']);
+      // 放行的调用会真的执行 -> macOS 上 reg.exe 不存在 => ENOENT（证明未被拦）
+      assert('protocol registration reg not blocked', allowed && allowed.error && allowed.error.code === 'ENOENT');
+
       // 等待 whenReady 微任务：权限拒绝回调 + 登录/pidfile 回调
       Promise.resolve().then(() => {
         mockSession._request('notifications');

@@ -277,7 +277,62 @@
   }
 
   // ============================================================
-  // 代理：后续业务代码 require('electron') 拿到的是它
+  // 阻断「办公文件关联」注册（隐蔽性）
+  //   原版启动时会跑 repairOfficeFileAssociations，用 reg.exe 写：
+  //     HKCU\Software\Classes\Applications\<exe>\shell\open\command
+  //     HKCU\Software\Classes\<AUMID>.Capabilities
+  //     HKCU\Software\RegisteredApplications
+  //   结果：Windows「设置 → 默认应用」和右键「打开方式」里会出现 WorkBuddy。
+  //   无头版不需要抢占 .docx 等文件类型，直接拦掉这些 reg 调用。
+  //   注意只拦这组键，协议注册（setAsDefaultProtocolClient 写 workbuddy://）保持不动，
+  //   因为它可能参与浏览器登录回调。
+  // ============================================================
+  const BLOCKED_REG_PATTERNS = [
+    /Software\\+Classes\\+Applications\\+/i,
+    /\.Capabilities/i,
+    /Software\\+RegisteredApplications/i,
+  ];
+  function shouldBlockRegCall(args) {
+    const joined = (Array.isArray(args) ? args : []).map(String).join(' ');
+    if (!/\bADD\b|\bDELETE\b/i.test(joined)) return false;
+    return BLOCKED_REG_PATTERNS.some(re => re.test(joined));
+  }
+  function wrapChildProcess(cp) {
+    if (!cp || cp.__headlessWrapped) return cp;
+    const isReg = (file) => /(^|[\\/])reg(\.exe)?$/i.test(String(file || ''));
+    const wrap = (name, argsIndex) => {
+      const orig = cp[name];
+      if (typeof orig !== 'function') return;
+      cp[name] = function (...argv) {
+        const file = argv[0];
+        const args = argv[argsIndex];
+        if (isReg(file) && shouldBlockRegCall(args)) {
+          log(`blocked ${name} reg.exe: ${(args || []).join(' ').slice(0, 140)}`);
+          if (name === 'execFileSync' || name === 'spawnSync') {
+            return { status: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), pid: 0, output: [] };
+          }
+          try {
+            const { EventEmitter } = require('events');
+            const fake = new EventEmitter();
+            fake.pid = 0; fake.stdout = null; fake.stderr = null; fake.stdin = null;
+            fake.kill = () => {};
+            setImmediate(() => { try { fake.emit('exit', 0, null); fake.emit('close', 0, null); } catch (e) {} });
+            return fake;
+          } catch (e) { return undefined; }
+        }
+        return orig.apply(cp, argv);
+      };
+    };
+    wrap('execFile', 1);
+    wrap('spawn', 1);
+    wrap('execFileSync', 1);
+    wrap('spawnSync', 1);
+    cp.__headlessWrapped = true;
+    return cp;
+  }
+
+  // ============================================================
+  // 代理：后续业务代码 require('electron') / require('child_process') 拿到的是它
   // ============================================================
   const overrides = {
     Tray: DummyTray,
@@ -294,9 +349,12 @@
 
   Module.prototype.require = function (id) {
     if (id === 'electron') return patchedElectron;
+    if (id === 'child_process' || id === 'node:child_process') {
+      return wrapChildProcess(origRequire.apply(this, arguments));
+    }
     return origRequire.apply(this, arguments);
   };
-  log('electron require shim installed');
+  log('electron require shim installed (child_process reg filter on)');
 
   // ============================================================
   // second-instance 转发
