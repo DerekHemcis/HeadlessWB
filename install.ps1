@@ -35,8 +35,27 @@ Write-Host "[1/4] 已注册开机自启 (HKCU Run): $value"
 Write-Host '[2/4] 启动 HeadlessWB 并打开浏览器登录页...'
 Start-Process -FilePath $exe -ArgumentList '--login'
 
+# 3.1) 启动自检：15 秒后确认进程真的活着，避免"看起来装好了其实秒退"
+Write-Host '[3/4] 等待 15 秒做启动自检...'
+Start-Sleep -Seconds 15
+$alive = Get-Process -Name 'HeadlessWB' -ErrorAction SilentlyContinue
+$logFile = Join-Path $env:USERPROFILE '.workbuddy\logs\headlesswb\patch.log'
+if ($alive) {
+  $count = ($alive | Measure-Object).Count
+  Write-Host "      启动成功：HeadlessWB 进程 $count 个"
+} else {
+  Write-Warning '启动失败：15 秒后没有 HeadlessWB 进程'
+  Write-Host '      常见原因：被杀软拦截、解压不完整、原版 WorkBuddy 抢单实例锁'
+  if (Test-Path $logFile) {
+    Write-Host "      补丁日志最后 20 行（$logFile）："
+    Get-Content $logFile -Tail 20 | ForEach-Object { Write-Host "        $_" }
+  } else {
+    Write-Host "      未生成补丁日志（$logFile），说明补丁没被加载，重试用 deploy.ps1 完整重装"
+  }
+}
+
 # 4) 提示
-Write-Host '[3/4] 完成。请在浏览器中扫码登录。'
+Write-Host '[4/4] 安装流程结束。请在浏览器中扫码登录。'
 Write-Host ''
 Write-Host '说明:'
 Write-Host '  - 登录成功后软件完全静默后台运行，无窗口/托盘/通知'
