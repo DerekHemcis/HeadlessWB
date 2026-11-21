@@ -21,7 +21,20 @@ try {
   $fs.Close()
 }
 
-$expected = 586126433
-$actual = (Get-Item $outZip).Length
-Write-Host ("合并完成: {0} 字节" -f $actual)
-if ($actual -ne $expected) { Write-Warning "大小与预期($expected)不一致，合并可能损坏，请重新 clone 后重试" }
+$expectedSize = 586126433
+$expectedSha  = '9FAFA3DCC7F582066838CA6595C34CC668BB67691F166F3BA6967D66D4CDC230'
+
+$actualSize = (Get-Item $outZip).Length
+Write-Host ("合并完成: {0} 字节 (预期 {1})" -f $actualSize, $expectedSize)
+if ($actualSize -ne $expectedSize) {
+  Write-Error "大小不一致，合并可能损坏。请确认分卷完整（应 7 个 part）后重试。"
+}
+
+Write-Host '校验 SHA256 ...'
+$actualSha = (Get-FileHash -Path $outZip -Algorithm SHA256).Hash
+Write-Host "  实际: $actualSha"
+Write-Host "  预期: $expectedSha"
+if ($actualSha -ne $expectedSha) {
+  Write-Error "SHA256 不匹配，zip 损坏。请重新 clone 仓库后重试。"
+}
+Write-Host '分卷完整、校验通过 ✅'

@@ -1,0 +1,14 @@
+# 二进制资产必须声明为 binary，否则 Windows 上的 git（core.autocrlf=true 默认）
+# 可能对分卷做行尾转换，导致合并出的 zip 损坏。
+release/parts/* binary
+release/*.zip binary
+
+# PowerShell 脚本用 CRLF，Windows 上执行最稳
+*.ps1 text eol=crlf
+
+# 其余按普通文本
+*.md text eol=lf
+*.mjs text eol=lf
+*.js text eol=lf
+*.cjs text eol=lf
+*.txt text eol=lf
