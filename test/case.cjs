@@ -244,8 +244,15 @@ setTimeout(() => {
         const opened = mockShell._opened || [];
         const hit = opened.some(u => u.indexOf('client-login') >= 0);
         assert('clipboard login url opened by patch', hit);
-        // 设备码必须被遮蔽后才写日志
-        finish();
+        const firstCount = opened.length;
+
+        // 可重入验证：再发一次 --login（模拟登录态过期后重新登录），必须能再跑一轮
+        mockApp.emit('second-instance', {}, ['--login']);
+        setTimeout(() => {
+          const after = (mockShell._opened || []).length;
+          assert('second --login re-runs (re-entrant)', after > firstCount);
+          finish();
+        }, 2600);
       }, 2600);
       return;
     }

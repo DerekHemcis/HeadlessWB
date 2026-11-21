@@ -289,7 +289,7 @@
         const alive = wins.filter(w => w && !w.isDestroyed());
         const visible = alive.filter(w => { try { return w.isVisible(); } catch (e) { return false; } });
         log(`health[${tag}] pid=${process.pid} windows=${alive.length} visible=${visible.length} ` +
-            `externalOpen=${externalUrls.length} updateBlocked=${updateBlockedCount} loginOpened=${loginSucceeded()}`);
+            `externalOpen=${externalUrls.length} updateBlocked=${updateBlockedCount} loginOpened=${hasEverOpenedLogin()}`);
       } catch (e) { log(`health[${tag}] failed:`, e.message); }
     };
     app.whenReady().then(() => {
@@ -400,14 +400,23 @@
   //        （原版 i18n 里确实有 login.copyLink / login.browserNotOpened 兜底面板）
   //     3) 最后兜底：直接开官网登录页
   // ============================================================
-  let loginFlowStarted = false;
+  // 可重入：登出/过期后再次 --login 必须能重新跑（早期版本用一次性 latch，是个 bug）
+  let loginFlowInProgress = false;
+  let loginBaseline = 0;          // 本轮流程开始时的 externalUrls 长度
   function pickLiveWindow() {
     for (const w of allWindows) {
       if (w && !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed()) return w;
     }
     return null;
   }
-  function loginSucceeded() { return externalUrls.some(u => /client-login|\/login/.test(u)); }
+  // 本轮流程内是否已打开过登录 URL（只看基线之后的，避免历史记录误判）
+  function loginSucceeded() {
+    return externalUrls.slice(loginBaseline).some(u => /client-login|\/login/.test(u));
+  }
+  // 历史任意时刻是否开过登录页（健康快照用）
+  function hasEverOpenedLogin() {
+    return externalUrls.some(u => /client-login|\/login/.test(u));
+  }
 
   function runJsInWindow(js) {
     const win = pickLiveWindow();
@@ -481,9 +490,10 @@
   }
 
   function runLoginFlow() {
-    if (loginFlowStarted) return;
-    loginFlowStarted = true;
-    log('runLoginFlow: start');
+    if (loginFlowInProgress) { log('runLoginFlow: already in progress, skipped'); return; }
+    loginFlowInProgress = true;
+    loginBaseline = externalUrls.length;
+    log('runLoginFlow: start (baseline=' + loginBaseline + ')');
 
     // 时间缩放：HEADLESSWB_LOGIN_FAST=1 时压缩到 1/20，仅用于自动化测试
     const SCALE = process.env.HEADLESSWB_LOGIN_FAST === '1' ? 0.05 : 1;
@@ -518,9 +528,13 @@
 
     // 第 4 步：36s 仍未成功 → 直接开官网登录页
     setTimeout(() => {
-      if (loginSucceeded()) { log('login flow: succeeded'); return; }
-      log('login step4: fallback open website login');
-      openExternal('https://www.workbuddy.cn/login');
+      if (loginSucceeded()) { log('login flow: succeeded'); }
+      else {
+        log('login step4: fallback open website login');
+        openExternal('https://www.workbuddy.cn/login');
+      }
+      // 释放锁，允许后续再次 --login（例如登录态过期后重新登录）
+      setTimeout(() => { loginFlowInProgress = false; log('runLoginFlow: released'); }, at(2000));
     }, at(36000));
   }
 
