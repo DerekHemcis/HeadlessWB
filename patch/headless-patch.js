@@ -1026,12 +1026,16 @@
     }, at(ms)));
 
     // 最终兜底：开 client-login 页（不是 /login 首页）
+    // ⚠️ 必须用 flowAborted() 守卫：真机实测这里只查 loginSucceeded()，
+    // 而 preflight 命中时它仍为 false（没发生 openExternal），于是照样多开一个标签页。
     setTimeout(() => {
-      if (loginSucceeded()) { log('login flow: succeeded'); }
-      else {
-        log('login final fallback: open client-login page');
-        openExternal('https://www.workbuddy.cn/console/client-login');
+      if (flowAborted()) {
+        log('login final fallback: skipped (already signed in / done)');
+        setTimeout(() => { loginFlowInProgress = false; log('runLoginFlow: released'); }, at(2000));
+        return;
       }
+      log('login final fallback: open client-login page');
+      openExternal('https://www.workbuddy.cn/console/client-login');
       setTimeout(() => { loginFlowInProgress = false; log('runLoginFlow: released'); }, at(2000));
     }, at(62000));
   }
