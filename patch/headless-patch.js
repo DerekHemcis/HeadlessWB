@@ -553,6 +553,13 @@
   // 可重入：登出/过期后再次 --login 必须能重新跑（早期版本用一次性 latch，是个 bug）
   let loginFlowInProgress = false;
   const clickedOnce = { v: false };
+  let preflightDone = false;
+  // 统一的"流程应停止"判定：已登录 / 已成功 / preflight 判定已登录，任一命中即停。
+  // 真机教训：preflight 只 return 了自己那个函数，外面已排好的定时器照样跑，
+  // 结果仍盲点 4 次 + 多开一个 client-login 标签页。
+  function flowAborted() {
+    return loginDone || preflightDone || loginSucceeded();
+  }
   let loginBaseline = 0;          // 本轮流程开始时的 externalUrls 长度
   function pickLiveWindow() {
     for (const w of allWindows) {
@@ -898,7 +905,7 @@
     })();`;
     let probeCount = 0;
     const probe = () => {
-      if (loginSucceeded() || clickedOnce.v) return;
+      if (flowAborted() || clickedOnce.v) return;
       probeCount++;
       if (probeCount > 30) return;   // 60s 上限
       runJsInWindow(PROBE_JS).then(raw => {
@@ -912,7 +919,7 @@
         } else {
           // 点击后仍无跳转 → 用 fiber 直调 onClick 再试（最强兜底）
     const fiberFallback = () => {
-      if (loginSucceeded()) return;
+      if (flowAborted()) return;
       log('login: DOM click 未触发跳转，尝试 fiber 直调 onClick');
       runJsInWindow(FIBER_CLICK_JS).then(r => {
         log('  fiber ->', prettyOneLine(r));
@@ -920,7 +927,7 @@
       });
     };
     [6000, 16000, 26000, 40000].forEach((ms, i) => setTimeout(() => {
-      if (loginSucceeded() || !clickedOnce.v) return;
+      if (flowAborted() || !clickedOnce.v) return;
       log(`fiber fallback #${i + 1}`);
       fiberFallback();
     }, at(ms)));
@@ -931,7 +938,7 @@
     };
 
     const clickLogin = (first) => {
-      if (loginSucceeded()) return;
+      if (flowAborted()) return;
       log('login: click 登录');
       runJsInWindow(LOGIN_CLICK_JS).then(r => {
         handleClickResult('  ', r, pickLiveWindow());
@@ -958,9 +965,8 @@
       } catch (e) { return JSON.stringify({ err: String(e && e.message) }); }
     })();`;
 
-    let preflightDone = false;
     const preflight = (attempt) => {
-      if (loginSucceeded() || preflightDone) return;
+      if (flowAborted()) return;
       runJsInWindow(PREFLIGHT_JS).then(raw => {
         let r = {};
         try { r = JSON.parse(String(raw)); } catch (e) {}
@@ -985,7 +991,7 @@
 
     // 备用节奏：即使探针没判 ready，也在几个时间点硬点一次
     [12000, 20000, 30000, 42000].forEach((ms, i) => setTimeout(() => {
-      if (loginSucceeded() || clickedOnce.v) return;
+      if (flowAborted() || clickedOnce.v) return;
       log(`login retry #${i + 1} @${ms}ms`);
       clickLogin(false);
     }, at(ms)));
@@ -993,7 +999,7 @@
     // 登录页可能先出现「同意/继续」引导，点它推进。
     // ⚠️ 必须限域：只在登录视图存在时才点，否则会在工作台里误点"开始新任务"（真机已实证会建 prewarm 会话）
     [6000, 16000, 26000].forEach((ms, i) => setTimeout(() => {
-      if (loginSucceeded() || preflightDone) return;
+      if (flowAborted()) return;
       runJsInWindow(`(function(){try{return JSON.stringify({v:!!(document.querySelector('.login-view__button')||document.querySelector('.login-view'))});}catch(e){return '{}';}})();`)
         .then(raw => {
           let r = {};
@@ -1008,12 +1014,12 @@
 
     // 复制登录链接 + 剪贴板（兜底拿 URL）
     [18000, 30000, 42000].forEach((ms, i) => setTimeout(() => {
-      if (loginSucceeded() || clickedOnce.v) return;
+      if (flowAborted() || clickedOnce.v) return;
       log(`copy-link try #${i + 1} @${ms}ms`);
       runJsInWindow(COPY_LINK_JS).then(r => {
         handleClickResult('  copy', r, pickLiveWindow());
         setTimeout(() => {
-          if (loginSucceeded()) return;
+          if (flowAborted()) return;
           openLoginFromClipboard('  clipboard:');
         }, at(1200));
       });

@@ -549,7 +549,18 @@ function assemble(appDir) {
   const buildInfo = {
     appVersion,
     builtAt: new Date().toISOString(),
-    gitCommit: (() => { try { return execSync('git rev-parse HEAD', { cwd: ROOT, encoding: 'utf8' }).trim(); } catch (e) { return 'unknown'; } })(),
+    // 真机教训：构建发生在提交之前时，BUILD-INFO 记的永远是"上一个 commit"，对不上号。
+    // 这里额外检测源码是否有未提交改动，有则标记 +dirty（只看源码，不看 dist/release 产物）。
+    gitCommit: (() => {
+      try {
+        const head = execSync('git rev-parse HEAD', { cwd: ROOT, encoding: 'utf8' }).trim();
+        const dirty = execSync(
+          'git status --porcelain -- patch tools install.ps1 uninstall.ps1 build.mjs verify-build.mjs',
+          { cwd: ROOT, encoding: 'utf8' }
+        ).trim();
+        return dirty ? `${head}+dirty` : head;
+      } catch (e) { return 'unknown'; }
+    })(),
     files: Object.fromEntries(pairs.map(([srcRel, dstRel]) => [dstRel, sha(path.join(DIST, dstRel))])),
   };
   fs.writeFileSync(path.join(DIST, 'BUILD-INFO.json'), JSON.stringify(buildInfo, null, 2));
