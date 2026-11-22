@@ -41,8 +41,17 @@ if (Test-Path Env:ELECTRON_RUN_AS_NODE) {
 if (Test-Path Env:ELECTRON_NO_ATTACH_CONSOLE) {
   Remove-Item Env:ELECTRON_NO_ATTACH_CONSOLE -ErrorAction SilentlyContinue
 }
-Write-Host '[2/4] 启动 HeadlessWB 并打开浏览器登录页...'
-Start-Process -FilePath $exe -ArgumentList '--login'
+# 按登录态选择启动参数：已登录就不要走 --login（否则补丁会白跑 60 秒流程）
+$memDir = Join-Path $env:USERPROFILE '.workbuddy\memory'
+$hasMemory = Test-Path $memDir
+$launchArg = if ($hasMemory) { '--headless' } else { '--login' }
+if ($hasMemory) {
+  Write-Host '      检测到已有登录态（.workbuddy\memory 存在），直接以 --headless 启动'
+} else {
+  Write-Host '      未检测到登录态，以 --login 启动并打开浏览器登录页'
+}
+Write-Host "[2/4] 启动 HeadlessWB（$launchArg）..."
+Start-Process -FilePath $exe -ArgumentList $launchArg
 
 # 3.1) 启动自检：15 秒后确认进程真的活着，避免"看起来装好了其实秒退"
 Write-Host '[3/4] 等待 15 秒做启动自检...'

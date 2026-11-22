@@ -83,8 +83,17 @@ if (Test-Path $logFile) {
   $out['patchLoaded']         = [bool](Select-String -Path $logFile -Pattern 'patch loaded' -Quiet)
   $out['requireShimActive']   = [bool](Select-String -Path $logFile -Pattern 'electron require shim installed' -Quiet)
   $out['updateBlockedSeen']   = [bool](Select-String -Path $logFile -Pattern 'blocked update check' -Quiet)
-  $out['loginOpenedBrowser']  = [bool](Select-String -Path $logFile -Pattern 'client-login|openExternal' -Quiet)
-  $out['loginClickedAny']     = [bool](Select-String -Path $logFile -Pattern 'clicked:' -Quiet)
+  # 只看"最近一次 patch loaded"之后的日志，避免历史记录让判定恒为 true（真机反馈）
+  $all = @(Get-Content $logFile -Encoding UTF8)
+  $lastStart = -1
+  for ($i = $all.Count - 1; $i -ge 0; $i--) {
+    if ($all[$i] -match 'patch loaded') { $lastStart = $i; break }
+  }
+  $session = if ($lastStart -ge 0) { $all[$lastStart..($all.Count - 1)] } else { $all }
+  $out['sessionLines']        = $session.Count
+  $out['loginOpenedBrowser']  = [bool]($session | Select-String -Pattern 'client-login|/login\?|openExternal' -Quiet)
+  $out['loginClickedAny']     = [bool]($session | Select-String -Pattern 'clicked' -Quiet)
+  $out['loginSkippedSignedIn'] = [bool]($session | Select-String -Pattern 'already signed in' -Quiet)
   $out['domDump']             = (Get-Content $logFile -Encoding UTF8 | Select-String -Pattern 'DOM: url=' | Select-Object -Last 3 | ForEach-Object { $_.Line }) -join ' | '
   $out['healthSnapshot']      = (Select-String -Path $logFile -Pattern 'health\[' | Select-Object -Last 4 | ForEach-Object { $_.Line }) -join ' | '
   $out['quitSuppressed']      = [bool](Select-String -Path $logFile -Pattern 'suppressed app.quit' -Quiet)

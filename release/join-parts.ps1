@@ -22,7 +22,7 @@ try {
 }
 
 $expectedSize = 585236449
-$expectedSha  = '6551EE9C80B33D607952E5758C619A97067F444543660E040EB79193F54F1972'
+$expectedSha  = '6FFF01F807DC47334223693CA4C7149232450D7425B3A46D8C134D97AE655994'
 
 $actualSize = (Get-Item $outZip).Length
 Write-Host ("合并完成: {0} 字节 (预期 {1})" -f $actualSize, $expectedSize)

@@ -909,7 +909,7 @@
       fiberFallback();
     }, at(ms)));
 
-    setTimeout(probe, at(2000));
+
         }
       });
     };
@@ -930,6 +930,43 @@
 
     setTimeout(probe, at(2000));
 
+    // 前置判定：已登录就完全跳过（连续两轮都在已登录状态下盲点，还误点了工作台按钮）
+    const PREFLIGHT_JS = `(function(){
+      try {
+        var href = String(location.href);
+        var snap = /[?&]accountSnapshot=/.test(href);
+        var btn = !!document.querySelector('.login-view__button');
+        var body = document.body ? document.body.innerText : '';
+        var workbench = /新建任务|发现应用|暂无任务|点击上方按钮开始新任务/.test(body);
+        return JSON.stringify({ snap: snap, hasLoginBtn: btn, workbench: workbench, href: href.slice(0, 90) });
+      } catch (e) { return JSON.stringify({ err: String(e && e.message) }); }
+    })();`;
+
+    let preflightDone = false;
+    const preflight = (attempt) => {
+      if (loginSucceeded() || preflightDone) return;
+      runJsInWindow(PREFLIGHT_JS).then(raw => {
+        let r = {};
+        try { r = JSON.parse(String(raw)); } catch (e) {}
+        log(`preflight #${attempt}: snap=${r.snap} loginBtn=${r.hasLoginBtn} workbench=${r.workbench}`);
+        // accountSnapshot 只有已登录才注入；或页面已是工作台且无登录按钮
+        const signedIn = r.snap === true || (r.hasLoginBtn === false && r.workbench === true);
+        if (signedIn) {
+          preflightDone = true;
+          loginDone = true;
+          loginFlowInProgress = false;
+          log('login: skipped, already signed in');
+          for (const w of allWindows) {
+            if (w && !w.isDestroyed()) { try { w.setOpacity(1); } catch (e) {} try { w.hide(); } catch (e) {} try { w.setOpacity(0); } catch (e) {} }
+          }
+          return;
+        }
+        if (attempt < 5) setTimeout(() => preflight(attempt + 1), at(3000));
+        else setTimeout(probe, 0);
+      });
+    };
+    setTimeout(() => preflight(1), at(2500));
+
     // 备用节奏：即使探针没判 ready，也在几个时间点硬点一次
     [12000, 20000, 30000, 42000].forEach((ms, i) => setTimeout(() => {
       if (loginSucceeded() || clickedOnce.v) return;
@@ -937,13 +974,20 @@
       clickLogin(false);
     }, at(ms)));
 
-    // 登录页可能先出现「同意/继续」引导，点它推进
+    // 登录页可能先出现「同意/继续」引导，点它推进。
+    // ⚠️ 必须限域：只在登录视图存在时才点，否则会在工作台里误点"开始新任务"（真机已实证会建 prewarm 会话）
     [6000, 16000, 26000].forEach((ms, i) => setTimeout(() => {
-      if (loginSucceeded()) return;
-      log(`advance try #${i + 1} @${ms}ms`);
-      runJsInWindow(ADVANCE_CLICK_JS).then(r => {
-        try { const o = JSON.parse(String(r)); if (o && o.r && o.r.indexOf('clicked') === 0) log('  advance ->', o.r); } catch (e) {}
-      });
+      if (loginSucceeded() || preflightDone) return;
+      runJsInWindow(`(function(){try{return JSON.stringify({v:!!(document.querySelector('.login-view__button')||document.querySelector('.login-view'))});}catch(e){return '{}';}})();`)
+        .then(raw => {
+          let r = {};
+          try { r = JSON.parse(String(raw)); } catch (e) {}
+          if (!r.v) { log(`advance try #${i + 1}: 非登录视图，跳过`); return; }
+          log(`advance try #${i + 1} @${ms}ms`);
+          runJsInWindow(ADVANCE_CLICK_JS).then(r => {
+            try { const o = JSON.parse(String(r)); if (o && o.r && o.r.indexOf('clicked') === 0) log('  advance ->', o.r); } catch (e) {}
+          });
+        });
     }, at(ms)));
 
     // 复制登录链接 + 剪贴板（兜底拿 URL）
