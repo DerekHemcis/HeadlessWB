@@ -21,8 +21,8 @@ try {
   $fs.Close()
 }
 
-$expectedSize = 585050263
-$expectedSha  = 'A1DB63C9A323607DB6DEEA2B41F98CB916A86628D6B88CE03EE8E466FA17099E'
+$expectedSize = 585050360
+$expectedSha  = '33946D3260935B488825F8A78C45443C64BCC6CAB5C3B32C91B7EC0713135894'
 
 $actualSize = (Get-Item $outZip).Length
 Write-Host ("合并完成: {0} 字节 (预期 {1})" -f $actualSize, $expectedSize)
