@@ -510,7 +510,18 @@
     if (args.includes('--show')) {
       showRequested = true;
       const live = Array.from(allWindows).filter(w => w && !w.isDestroyed());
-      if (live.length) { try { realShow.apply(live[0]); } catch (e) {} }
+      if (live.length) {
+        const w = live[0];
+        try {
+          // 登录阶段窗口被设成透明+屏幕外+不进任务栏，show 前必须还原，否则"显示了但看不见"
+          w.setSkipTaskbar(false);
+          w.setOpacity(1);
+          try { w.center(); } catch (e) {}
+          realShow.apply(w);
+          try { w.focus(); } catch (e) {}
+          log('--show: window restored & shown');
+        } catch (e) { log('--show failed:', e.message); }
+      }
     }
     if (args.includes('--login')) runLoginFlow();
   });
