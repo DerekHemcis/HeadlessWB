@@ -542,4 +542,12 @@ async function main() {
   log(`部署说明：把 dist/HeadlessWB 整个目录拷到 Windows 机器，运行 install.ps1 即可。`);
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+const KEEP_TMP = process.argv.includes('--keep-tmp');
+function cleanupTmp() {
+  if (KEEP_TMP) { console.log(`[build] --keep-tmp，保留临时目录: ${TMP}`); return; }
+  try { fs.rmSync(TMP, { recursive: true, force: true }); console.log(`[build] 已清理临时目录: ${TMP}`); } catch (e) {}
+}
+
+main()
+  .then(() => { cleanupTmp(); })
+  .catch((e) => { console.error(e); cleanupTmp(); process.exit(1); });
