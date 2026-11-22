@@ -235,4 +235,45 @@ HeadlessWB/
 
 16. **重打包保真性核对**（2026-11-22 增补）：把原版 asar 与新产物的条目列表做全量 diff → 新增 0 个、缺失 112 个（61 个跨平台 sidecar 文件 + 51 个因此变空的目录）。逐个确认这些**在官方 Windows 安装包里本来就不存在**（例：`koffi/build/koffi/win32_arm64`、`wwapi-electron/prebuilds/darwin-*` 均不在 Windows 包内），因此不是我们丢文件，而是 Windows 版官方也未分发。`verify-build.mjs` 已加第 4 步：逐个断言 6 个关键 Windows 原生模块（koffi win32_x64 ×2、node-pty ×2、im-napi、turing_sdk）在解压产物中存在。
 
-17. **与原版 WorkBuddy 共存的单实例冲突**（2026-11-22 增补）：无头版沿用原版 userData 目录（好处是已登录态直接复用、免重新扫码），但 Electron `requestSingleInstanceLock` 以 userData 为锁——**原版与无头版不能同时运行**，否则后启动者抢锁失败退出。原版自启 Run 键名是 `WorkBuddy.WorkBuddy`（`resolveWin32AppUserModelId`）。因此 `install.ps1` 现在会：停掉 `WorkBuddy`/`HeadlessWB` 进程 → 删除原版 `WorkBuddy`/`WorkBuddy.WorkBuddy` 两个 Run 键 → 再写 `HeadlessWB` Run 键；`verify.ps1` 同步检查旧键已清、原版进程未跑。
+18. **⚠️ 发布事故：磁盘满 + grep 吞掉错误 → 用旧 dist 打包**（2026-11-22 第九/十轮真机实测）
+    第九轮"改对了但没验到"的根因不是代码，是**出包链路**：
+    a) `build.mjs` 每次构建用 `mkdtemp` 建临时目录却**从不清理**，累积了 3 个 × 3.1GB；
+    b) 磁盘满（`ENOSPC`）导致 `assemble()` 复制失败；
+    c) 我用 `grep -E '自校验|注入点|ERROR'` 过滤构建输出，**错误信息被吞掉**；
+    d) 结果拿 12:18 的旧 `dist` 打了包，交付包与 commit 完全不一致（真机逐字节比对发现：
+       `headless-patch.js` 43883≠46687、`verify.ps1` 无新字段、`install.ps1` 仍硬编码 `--login`）。
+    修复（真机建议，全部采纳）：
+    - `build.mjs` 末尾加**硬断言**：`dist` 与源码 6 个文件 SHA256 逐个比对，不一致 `fail()` 拒绝出包；
+    - 落 `BUILD-INFO.json`（commit + 各文件 hash）到产物根目录；
+    - `deploy.ps1` 解压后比对 `resources/headless-patch.js` 与仓库 `patch/headless-patch.js`，不一致 `throw`；
+    - `verify-build.mjs` 加第 6 步同样的一致性检查；
+    - `build.mjs` 加临时目录自动清理（`--keep-tmp` 可保留）。
+    注：这些断言上线后**立刻抓到了我自己刚犯的同类错误**（改完 `deploy.ps1` 没重构建）。
+
+19. **⚠️ `RepairApp.exe` 在开机自启时弹「WorkBuddy 启动修复」模态框**（2026-11-22 第十一轮真机实测）
+    这是**从第一轮就存在**的隐蔽性缺陷，直到真机重启才暴露。`main.log` 原句：
+    `[StartupRepair] off-thread .NET 4.6.2+ probe passed, repair helper spawn issued`。
+    根因：`resources/install-manifest.json` 要求 `WorkBuddy.exe`，但交付包里改名为 `HeadlessWB.exe`，
+    且 `app.asar` 重打包后哈希必变 → RepairApp 校验判定"安装文件损坏或缺失" → 弹框。
+    真机实测确认**不启动 helper 完全安全**：`[StartupRepair] early preflight: skip {"reason":"helper-not-found"}`
+    只写一行 info 就跳过，应用功能完整、无报错。
+    修复（方案 A + B 双保险）：
+    - A：构建时**移除** `RepairApp.exe` + `RepairApp.exe.config`，并同步从 manifest 移除（119→118 条）、
+      `WorkBuddy.exe` 改名 `HeadlessWB.exe`；
+    - B：补丁层 `child_process` 过滤器新增 `isRepairHelper`，万一 helper 又出现也拦掉它的 spawn。
+
+20. **`preflight` 只 `log` 不中止 → 已登录仍盲点**（2026-11-22 第十二轮真机实测）
+    第九轮加的 preflight 判定正确（`snap=true loginBtn=false workbench=true` →
+    `login: skipped, already signed in`），但 `return` 只退出了 preflight 自己那个函数；
+    而 `probe` / `clickLogin` / `advance` / `copy-link` / `fiber` / `final-fallback` 的定时器
+    **在 runLoginFlow 里早已排好**，照样执行 → 仍盲点 4 次 + 多开一个 `console/client-login` 标签页。
+    修复：新增统一守卫 `flowAborted()`（= `loginDone || preflightDone || loginSucceeded()`），
+    **9 处定时器守卫全部改为它**；`preflightDone` 提升到模块作用域。
+
+21. **`BUILD-INFO.gitCommit` 滞后一轮**（2026-11-22 第十二轮真机实测）
+    构建发生在提交之前时，记录到的永远是"上一个 commit"。
+    修复：`build.mjs` 生成 BUILD-INFO 时检测源码是否有未提交改动（`git status --porcelain` 只查源码路径），
+    有则写 `<commit>+dirty`；同时交付流程改为**先提交源码 → 再构建 → 再提交产物**。
+    因此 `BUILD-INFO.gitCommit` 是 HEAD 的父提交（源码基线），属正常；核对应以 zip/patch 的 SHA256 为准。
+
+22. **与原版 WorkBuddy 共存的单实例冲突**（2026-11-22 增补）：无头版沿用原版 userData 目录（好处是已登录态直接复用、免重新扫码），但 Electron `requestSingleInstanceLock` 以 userData 为锁——**原版与无头版不能同时运行**，否则后启动者抢锁失败退出。原版自启 Run 键名是 `WorkBuddy.WorkBuddy`（`resolveWin32AppUserModelId`）。因此 `install.ps1` 现在会：停掉 `WorkBuddy`/`HeadlessWB` 进程 → 删除原版 `WorkBuddy`/`WorkBuddy.WorkBuddy` 两个 Run 键 → 再写 `HeadlessWB` Run 键；`verify.ps1` 同步检查旧键已清、原版进程未跑。
