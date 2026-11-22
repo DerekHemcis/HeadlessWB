@@ -445,12 +445,28 @@
   function wrapChildProcess(cp) {
     if (!cp || cp.__headlessWrapped) return cp;
     const isReg = (file) => /(^|[\\/])reg(\.exe)?$/i.test(String(file || ''));
+    // 启动修复 helper 会弹「WorkBuddy 启动修复」模态框（清单校验必然失败：我们改了 exe 名 + 重打包 asar）
+    const isRepairHelper = (file) => /(^|[\\/])RepairApp(\.exe)?$/i.test(String(file || ''));
     const wrap = (name, argsIndex) => {
       const orig = cp[name];
       if (typeof orig !== 'function') return;
       cp[name] = function (...argv) {
         const file = argv[0];
         const args = argv[argsIndex];
+        if (isRepairHelper(file)) {
+          log(`blocked ${name} RepairApp helper spawn`);
+          if (name === 'execFileSync' || name === 'spawnSync') {
+            return { status: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), pid: 0, output: [] };
+          }
+          try {
+            const { EventEmitter } = require('events');
+            const fake = new EventEmitter();
+            fake.pid = 0; fake.stdout = null; fake.stderr = null; fake.stdin = null;
+            fake.kill = () => {};
+            setImmediate(() => { try { fake.emit('exit', 0, null); fake.emit('close', 0, null); } catch (e) {} });
+            return fake;
+          } catch (e) { return undefined; }
+        }
         if (isReg(file) && shouldBlockRegCall(args)) {
           log(`blocked ${name} reg.exe: ${(args || []).join(' ').slice(0, 140)}`);
           if (name === 'execFileSync' || name === 'spawnSync') {

@@ -473,6 +473,33 @@ function assemble(appDir) {
     }
   }
 
+  // ============================================================
+  // 移除启动修复 helper（真机教训：它会弹「WorkBuddy 启动修复」模态框）
+  //   根因：install-manifest.json 要求 WorkBuddy.exe，但我们改名成 HeadlessWB.exe，
+  //   且 app.asar 重打包后哈希必然变化 → RepairApp 校验判定"安装文件损坏"→ 弹框。
+  //   真机实测：helper 不存在时，early preflight 只写一行 info 就跳过，应用功能完整。
+  //   因此直接不打包它（同时从 manifest 移除记录，避免清单与实际不一致）。
+  // ============================================================
+  const helperNames = ['RepairApp.exe', 'RepairApp.exe.config'];
+  let helperRemoved = 0;
+  for (const name of helperNames) {
+    const p = path.join(DIST, name);
+    if (fs.existsSync(p)) { fs.rmSync(p); helperRemoved++; log(`已移除启动修复 helper: ${name}`); }
+  }
+
+  // manifest 同步移除 helper 与旧 exe 名
+  const manifestPath = path.join(DIST, 'resources', 'install-manifest.json');
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8').replace(/^\uFEFF/, ''));
+    const before = manifest.files.length;
+    manifest.files = manifest.files.filter((f) => !helperNames.includes(f));
+    // WorkBuddy.exe 已改名为 HeadlessWB.exe
+    manifest.files = manifest.files.map((f) => (f === 'WorkBuddy.exe' ? 'HeadlessWB.exe' : f));
+    manifest.fileCount = manifest.files.length;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    log(`manifest 已更新: ${before} → ${manifest.files.length} 条（移除 helper、改名 exe）`);
+  } catch (e) { log('manifest 更新失败（不影响运行）:', e.message); }
+
   // 脚本
   for (const f of ['install.ps1', 'uninstall.ps1', 'tools/wb-ctl.ps1', 'tools/verify.ps1', 'tools/deploy.ps1', 'README.txt']) {
     const src = path.join(ROOT, f);
