@@ -2,7 +2,9 @@
 $ErrorActionPreference = 'SilentlyContinue'
 
 # 1) 停止进程
-Get-Process -Name 'HeadlessWB' -ErrorAction SilentlyContinue | Stop-Process -Force
+foreach ($n in @('HeadlessWB','RepairApp','workbuddy-editor-sdk-supervisor')) {
+  Get-Process -Name $n -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+}
 
 # 2) 移除 Run 键
 Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'HeadlessWB' -ErrorAction SilentlyContinue

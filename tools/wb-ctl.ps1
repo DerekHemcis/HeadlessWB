@@ -39,7 +39,9 @@ switch ($Command) {
     Write-Host '已启动（静默后台）'
   }
   'stop' {
-    Get-Process -Name 'HeadlessWB' -ErrorAction SilentlyContinue | Stop-Process -Force
+    foreach ($n in @('HeadlessWB','RepairApp')) {
+      Get-Process -Name $n -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
     Write-Host '已停止'
   }
   default {

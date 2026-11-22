@@ -278,7 +278,8 @@
     try {
       realShell.openExternal = function (url) {
         externalUrls.push(String(url));
-        log('openExternal:', String(url).slice(0, 160));
+        // 完整记录（不截断）：真机要用这条 URL 复用/排查；仅遮蔽 code
+        log('openExternal:', String(url).replace(/([?&]code=)[^&]+/i, '$1***'));
         return realOpenExternal(url);
       };
     } catch (e) { log('shell.openExternal patch failed', e.message); }
@@ -524,6 +525,7 @@
   // ============================================================
   // 可重入：登出/过期后再次 --login 必须能重新跑（早期版本用一次性 latch，是个 bug）
   let loginFlowInProgress = false;
+  const clickedOnce = { v: false };
   let loginBaseline = 0;          // 本轮流程开始时的 externalUrls 长度
   function pickLiveWindow() {
     for (const w of allWindows) {
@@ -670,7 +672,7 @@
         }
       }
     }
-    try { diag.hasLoginView = !!(document.querySelector('.login-view')); } catch (e) {}
+    try { diag.hasLoginView = !!(document.querySelector('.login-view') || document.querySelector('.login-view__button')); } catch (e) {}
 
     var docs = roots();
     var tried = 0;
@@ -833,6 +835,8 @@
   function onLoginSuccess() {
     if (loginDone) return;
     loginDone = true;
+    clickedOnce.v = true;   // 锁死后续所有点击/复制尝试，避免开第二个标签页
+    loginFlowInProgress = false;
     log('login: succeeded, hiding login window');
     for (const w of allWindows) {
       if (w && !w.isDestroyed()) {
@@ -859,14 +863,13 @@
     const PROBE_JS = `(function(){
       try {
         var btn = document.querySelector('.login-view__button');
-        var view = document.querySelector('.login-view');
+        var view = document.querySelector('.login-view') || document.querySelector('.login-view__button');
         var body = document.body ? document.body.innerText : '';
         var ready = !!(btn || view) || /服务条款|隐私政策|登录/.test(body);
         return JSON.stringify({ ready: ready, url: String(location.href).slice(0,120), els: document.querySelectorAll('*').length });
       } catch (e) { return JSON.stringify({ ready: false, err: String(e && e.message) }); }
     })();`;
     let probeCount = 0;
-    const clickedOnce = { v: false };
     const probe = () => {
       if (loginSucceeded() || clickedOnce.v) return;
       probeCount++;
@@ -934,7 +937,7 @@
 
     // 复制登录链接 + 剪贴板（兜底拿 URL）
     [18000, 30000, 42000].forEach((ms, i) => setTimeout(() => {
-      if (loginSucceeded()) return;
+      if (loginSucceeded() || clickedOnce.v) return;
       log(`copy-link try #${i + 1} @${ms}ms`);
       runJsInWindow(COPY_LINK_JS).then(r => {
         handleClickResult('  copy', r, pickLiveWindow());

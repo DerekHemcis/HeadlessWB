@@ -13,7 +13,7 @@ Get-ChildItem -Path $dir -Filter '*.dll' -ErrorAction SilentlyContinue | ForEach
 
 # 0) 停掉可能冲突的原版 WorkBuddy / 旧 HeadlessWB 进程
 #    （两者共用同一 userData，Electron 单实例锁会互斥，必须只留一个）
-foreach ($name in @('WorkBuddy', 'HeadlessWB')) {
+foreach ($name in @('WorkBuddy', 'HeadlessWB', 'RepairApp', 'workbuddy-editor-sdk-supervisor')) {
   Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 Write-Host '[0/4] 已停止可能冲突的 WorkBuddy/HeadlessWB 进程'

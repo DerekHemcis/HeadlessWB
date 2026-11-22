@@ -45,7 +45,7 @@ if (-not (Test-Path $zip)) { throw "分卷合并后未生成 $zip" }
 
 # ---- 3. 停掉正在运行的旧进程（文件被占用会导致解压失败） ----
 Write-Host '[3/5] 停止可能占用文件的进程...'
-foreach ($name in @('HeadlessWB', 'WorkBuddy')) {
+foreach ($name in @('HeadlessWB', 'WorkBuddy', 'RepairApp', 'workbuddy-editor-sdk-supervisor')) {
   Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 Start-Sleep -Seconds 2
@@ -54,7 +54,22 @@ Start-Sleep -Seconds 2
 Write-Host '[4/5] 解压...'
 if (Test-Path $InstallDir) {
   Write-Host "      目标目录已存在，清理旧文件: $InstallDir"
-  Remove-Item -Path (Join-Path $InstallDir '*') -Recurse -Force -ErrorAction SilentlyContinue
+  $cleared = $false
+  for ($try = 1; $try -le 3; $try++) {
+    # 每轮先把可能锁定文件的进程再杀一次（RepairApp.exe 会加载 Newtonsoft.Json.dll）
+    foreach ($pn in @('HeadlessWB', 'RepairApp', 'workbuddy-editor-sdk-supervisor', 'WorkBuddy')) {
+      Get-Process -Name $pn -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Milliseconds 800
+    Remove-Item -Path (Join-Path $InstallDir '*') -Recurse -Force -ErrorAction SilentlyContinue
+    $left = @(Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue)
+    if ($left.Count -eq 0) { $cleared = $true; break }
+    Write-Warning "      第 $try 次清理后仍剩 $($left.Count) 个文件（可能被占用），重试..."
+  }
+  if (-not $cleared) {
+    $left = @(Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue | Select-Object -First 8 | ForEach-Object { $_.Name })
+    throw ("无法清空安装目录（文件被占用）。残留示例: " + ($left -join ', ') + "。请手工结束 RepairApp/HeadlessWB 进程后重试。")
+  }
 } else {
   New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
