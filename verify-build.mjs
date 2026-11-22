@@ -24,13 +24,13 @@ function run(cmd, args, cwd = __dirname) {
   return r;
 }
 
-step('1/5 补丁语法检查');
+step('1/6 补丁语法检查');
 run(process.execPath, ['--check', path.join(__dirname, 'patch', 'headless-patch.js')]);
 
-step('2/5 冒烟测试（mock electron）');
+step('2/6 冒烟测试（mock electron）');
 run(process.execPath, [path.join(__dirname, 'test', 'run-tests.mjs')]);
 
-step('3/5 产物 asar 校验');
+step('3/6 产物 asar 校验');
 const asarPath = path.join(__dirname, 'dist', 'HeadlessWB', 'resources', 'app.asar');
 if (!fs.existsSync(asarPath)) {
   console.log('未找到 dist/HeadlessWB/resources/app.asar（先跑 node build.mjs）');
@@ -47,7 +47,7 @@ if (!fs.existsSync(asarPath)) {
 }
 
 // ---- 4) 关键 Windows 原生模块必须在解压后的 sidecar 里 ----
-step('4/5 Windows 原生模块齐全性');
+step('4/6 Windows 原生模块齐全性');
 const sidecar = path.join(__dirname, 'dist', 'HeadlessWB', 'resources', 'app.asar.unpacked');
 const critical = [
   'cli/node_modules/koffi/build/koffi/win32_x64/koffi.node',
@@ -66,7 +66,7 @@ for (const rel of critical) {
 console.log(miss === 0 ? 'Windows 原生模块齐全 ✅' : `缺 ${miss} 个原生模块 ❌`);
 
 // ---- 5) 产物 exe 的 fuse 状态（asar 完整性校验必须已关闭）----
-step('5/5 产物 exe fuse 校验');
+step('5/6 产物 exe fuse 校验');
 {
   const exePath = path.join(__dirname, 'dist', 'HeadlessWB', 'HeadlessWB.exe');
   if (!fs.existsSync(exePath)) { console.log('未找到 HeadlessWB.exe'); failed = true; }
@@ -92,6 +92,30 @@ step('5/5 产物 exe fuse 校验');
       if (!ok1 || !ok2) failed = true;
     }
   }
+}
+
+// ---- 6) dist 与源码一致性（真机教训：曾用旧 dist 打包导致"改对了没验到"）----
+step('6/6 dist 与源码一致性');
+{
+  const { createHash } = await import('node:crypto');
+  const sha = (f) => createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+  const pairs = [
+    ['patch/headless-patch.js', 'dist/HeadlessWB/resources/headless-patch.js'],
+    ['install.ps1', 'dist/HeadlessWB/install.ps1'],
+    ['uninstall.ps1', 'dist/HeadlessWB/uninstall.ps1'],
+    ['tools/wb-ctl.ps1', 'dist/HeadlessWB/tools/wb-ctl.ps1'],
+    ['tools/verify.ps1', 'dist/HeadlessWB/tools/verify.ps1'],
+    ['tools/deploy.ps1', 'dist/HeadlessWB/tools/deploy.ps1'],
+  ];
+  let bad = 0;
+  for (const [a, b] of pairs) {
+    const pa = path.join(__dirname, a), pb = path.join(__dirname, b);
+    if (!fs.existsSync(pa) || !fs.existsSync(pb)) { console.log(`  缺失 ${a} 或 ${b}`); bad++; continue; }
+    if (sha(pa) === sha(pb)) console.log(`  OK   ${b}`);
+    else { console.log(`  DIFF ${b}`); bad++; }
+  }
+  if (bad) { console.log(`${bad} 个文件不一致 ❌`); failed = true; }
+  else console.log('dist 与源码完全一致 ✅');
 }
 
 console.log(failed ? '\n验证未全部通过 ❌' : '\n全部验证通过 ✅');

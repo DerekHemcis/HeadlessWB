@@ -121,6 +121,27 @@ if ($missing.Count -gt 0) {
 }
 Write-Host '      关键文件齐全 ✅'
 
+# 解压后比对补丁与仓库源码（防止"产物与 commit 不一致"再次发生）
+$srcPatch = Join-Path $repoDir 'patch\headless-patch.js'
+$dstPatch = Join-Path $InstallDir 'resources\headless-patch.js'
+if ((Test-Path $srcPatch) -and (Test-Path $dstPatch)) {
+  $h1 = (Get-FileHash $srcPatch -Algorithm SHA256).Hash
+  $h2 = (Get-FileHash $dstPatch -Algorithm SHA256).Hash
+  if ($h1 -ne $h2) {
+    throw "交付包补丁与仓库源码不一致（src=$($h1.Substring(0,16)) dist=$($h2.Substring(0,16))），拒绝继续"
+  }
+  Write-Host '      补丁与源码一致 ✅'
+} else {
+  Write-Host '      （跳过补丁比对：逐卷下载模式无 patch/ 目录）'
+}
+
+# 打印 BUILD-INFO（若有）
+$bi = Join-Path $InstallDir 'BUILD-INFO.json'
+if (Test-Path $bi) {
+  Write-Host '      BUILD-INFO:'
+  Get-Content $bi -Raw | Write-Host
+}
+
 if ($NoInstall) {
   Write-Host ''
   Write-Host "已完成解压（-NoInstall）。下一步手动执行:"

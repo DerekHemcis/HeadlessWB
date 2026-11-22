@@ -16,7 +16,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -489,6 +490,44 @@ function assemble(appDir) {
     appVersion = manifest.appVersion || manifest.version || 'unknown';
   } catch (e) {}
   fs.writeFileSync(path.join(DIST, 'HEADLESSWB_VERSION.txt'), `appVersion=${appVersion}\nbuiltAt=${new Date().toISOString()}\n`);
+  // ============================================================
+  // 出包一致性断言（真机教训：磁盘满导致 assemble 失败，用旧 dist 打了包，
+  // 结果"改对了但没验到"。这里逐个文件比对 dist 与源码的 SHA256，不一致直接 fail。
+  // ============================================================
+  const sha = (f) => createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+  const pairs = [
+    ['patch/headless-patch.js', 'resources/headless-patch.js'],
+    ['install.ps1', 'install.ps1'],
+    ['uninstall.ps1', 'uninstall.ps1'],
+    ['tools/wb-ctl.ps1', 'tools/wb-ctl.ps1'],
+    ['tools/verify.ps1', 'tools/verify.ps1'],
+    ['tools/deploy.ps1', 'tools/deploy.ps1'],
+  ];
+  const mismatch = [];
+  for (const [srcRel, dstRel] of pairs) {
+    const srcAbs = path.join(ROOT, srcRel);
+    const dstAbs = path.join(DIST, dstRel);
+    if (!fs.existsSync(srcAbs)) { mismatch.push(`${srcRel} 源文件不存在`); continue; }
+    if (!fs.existsSync(dstAbs)) { mismatch.push(`${dstRel} 产物缺失`); continue; }
+    const a = sha(srcAbs), b = sha(dstAbs);
+    if (a !== b) mismatch.push(`${dstRel}: 源码 ${a.slice(0, 16)} ≠ 产物 ${b.slice(0, 16)}`);
+  }
+  if (mismatch.length) {
+    for (const m of mismatch) log('  ✗ ' + m);
+    fail('产物与源码不一致（' + mismatch.length + ' 处）——拒绝发布');
+  }
+  log(`出包一致性校验通过 ✅（${pairs.length} 个文件 SHA256 全部匹配）`);
+
+  // 落一份 BUILD-INFO.json，真机可直接核对（真机建议）
+  const buildInfo = {
+    appVersion,
+    builtAt: new Date().toISOString(),
+    gitCommit: (() => { try { return execSync('git rev-parse HEAD', { cwd: ROOT, encoding: 'utf8' }).trim(); } catch (e) { return 'unknown'; } })(),
+    files: Object.fromEntries(pairs.map(([srcRel, dstRel]) => [dstRel, sha(path.join(DIST, dstRel))])),
+  };
+  fs.writeFileSync(path.join(DIST, 'BUILD-INFO.json'), JSON.stringify(buildInfo, null, 2));
+  log('已写出 BUILD-INFO.json');
+
   log(`产物已生成: ${DIST}`);
 }
 
