@@ -12,3 +12,7 @@ release/*.zip binary
 *.js text eol=lf
 *.cjs text eol=lf
 *.txt text eol=lf
+
+# 二进制资产
+assets/*.sfx binary
+release/setup-parts/* binary

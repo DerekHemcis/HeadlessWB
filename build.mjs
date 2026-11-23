@@ -431,6 +431,50 @@ async function verifyAsar(asarPath, unpackedDir, { sampleEvery = 1 } = {}) {
 }
 
 // ------------------------------------------------------------
+// 单文件安装器：7z.sfx + config.txt + payload.7z = HeadlessWB-Setup.exe
+//   双击即安装：解压到临时目录 → 运行 setup.ps1 → 复制到 %USERPROFILE%\HeadlessWB
+//   → 写自启 → 启动。用户无需手动解压或跑脚本。
+// ------------------------------------------------------------
+function buildInstaller() {
+  const sfxPath = path.join(ROOT, 'assets', '7z.sfx');
+  if (!fs.existsSync(sfxPath)) {
+    log('跳过安装器：缺少 assets/7z.sfx（可从 7-Zip 官方安装包提取）');
+    return null;
+  }
+  const sevenz = resolve7z();
+  const outExe = path.join(ROOT, 'dist', 'HeadlessWB-Setup.exe');
+  const payload = path.join(TMP, 'payload.7z');
+  const configPath = path.join(TMP, 'config.txt');
+
+  log('打包单文件安装器…');
+  // 压缩 dist/HeadlessWB 的内容（不含外层目录）
+  run(sevenz, ['a', '-t7z', '-mx=7', '-mmt=on', payload, '.', '-r'], { cwd: DIST });
+
+  // 7z SFX 配置：解压后执行 setup.ps1（cmd /c 让控制台可见，用户能看到安装过程）
+  const config = [
+    ';!@Install@!UTF-8!',
+    'Title="HeadlessWB 安装程序"',
+    'Progress="yes"',
+    'RunProgram="cmd.exe /c powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%%T\\setup.ps1\""',
+    ';!@InstallEnd@!',
+    '',
+  ].join('\n');
+  fs.writeFileSync(configPath, Buffer.from(config, 'utf8'));
+
+  // 拼接：sfx + config + payload
+  const parts = [fs.readFileSync(sfxPath), fs.readFileSync(configPath), fs.readFileSync(payload)];
+  fs.writeFileSync(outExe, Buffer.concat(parts));
+
+  // 校验：MZ 头 + 内嵌 7z 完整性
+  const head = fs.readFileSync(outExe).subarray(0, 2).toString('latin1');
+  if (head !== 'MZ') fail('安装器不是有效的 PE 文件');
+  const t = spawnSync(sevenz, ['t', outExe], { encoding: 'utf8' });
+  if (t.status !== 0) fail(`安装器内嵌数据完整性校验失败: ${(t.stderr || '').slice(-400)}`);
+  log(`安装器已生成: ${outExe} (${(fs.statSync(outExe).size / 1048576).toFixed(1)} MB) — 内嵌数据校验通过`);
+  return outExe;
+}
+
+// ------------------------------------------------------------
 // 5) 组装产物
 // ------------------------------------------------------------
 function assemble(appDir) {
@@ -501,7 +545,7 @@ function assemble(appDir) {
   } catch (e) { log('manifest 更新失败（不影响运行）:', e.message); }
 
   // 脚本
-  for (const f of ['install.ps1', 'uninstall.ps1', 'tools/wb-ctl.ps1', 'tools/verify.ps1', 'tools/deploy.ps1', 'README.txt']) {
+  for (const f of ['install.ps1', 'uninstall.ps1', 'setup.ps1', 'tools/wb-ctl.ps1', 'tools/verify.ps1', 'tools/deploy.ps1', 'README.txt']) {
     const src = path.join(ROOT, f);
     if (fs.existsSync(src)) {
       const dst = path.join(DIST, f);
@@ -525,6 +569,7 @@ function assemble(appDir) {
   const pairs = [
     ['patch/headless-patch.js', 'resources/headless-patch.js'],
     ['install.ps1', 'install.ps1'],
+    ['setup.ps1', 'setup.ps1'],
     ['uninstall.ps1', 'uninstall.ps1'],
     ['tools/wb-ctl.ps1', 'tools/wb-ctl.ps1'],
     ['tools/verify.ps1', 'tools/verify.ps1'],
@@ -576,8 +621,12 @@ async function main() {
   const appDir = extractInstaller(installer);
   await patchAsar(appDir);
   assemble(appDir);
+  buildInstaller();
   log('构建完成 ✅');
-  log(`部署说明：把 dist/HeadlessWB 整个目录拷到 Windows 机器，运行 install.ps1 即可。`);
+  log('交付方式（任选其一）：');
+  log('  · dist/HeadlessWB-Setup.exe  双击即安装（推荐）');
+  log('  · dist/HeadlessWB/ 整个目录 + install.ps1（绿色版）');
+  log('  · dist/HeadlessWB.zip（分卷在 release/parts/）');
 }
 
 const KEEP_TMP = process.argv.includes('--keep-tmp');
