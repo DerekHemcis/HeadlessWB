@@ -16,3 +16,8 @@ HeadlessWB —— WorkBuddy 无头版部署说明
 
 日志：%USERPROFILE%\.workbuddy\logs\headlesswb\patch.log
 卸载：powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
+
+语言 / Language:
+  English : README.md
+  简体中文 : README.zh-CN.md
+  安装说明 : docs/install-guide.md
