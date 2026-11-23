@@ -1,5 +1,8 @@
 # HeadlessWB —— WorkBuddy 无头隐蔽版（Windows）
 
+> **最简单的安装方式：双击 `HeadlessWB-Setup.exe` 即可**（自动解压 → 安装到 `%USERPROFILE%\HeadlessWB` → 写开机自启 → 启动）。
+> 详见 `docs/install-guide.md`。
+
 在官方 WorkBuddy Windows 客户端基础上改造的无头受控端：平时无窗口、无托盘、
 无通知、无声，仅作为后台 agent 被手机官方 WorkBuddy App 远程操控；只有登录时
 自动打开一次系统浏览器。
